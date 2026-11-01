@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.3] - 2026-10-31
+
+### Fixed
+- **Joining a friend's room.** If you typed the host's address and pressed PLAY without saving it first, the launcher ignored it, started a room server of its own and you ended up alone in your own world. It now uses the address you typed.
+- **Black or half-drawn screen on laptops with integrated graphics** when the game ran out of graphics memory: the game now keeps smaller caches on integrated GPUs and recovers on its own if memory runs out.
+- The graphics API chosen in the launcher (Vulkan or DX12) is now really used.
+
+### Added
+- The log now lists the graphics card, its driver and the features it supports, to help with reports.
+
 ## [0.9.2] - 2026-10-31
 
 ### Added

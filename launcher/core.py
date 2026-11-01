@@ -33,7 +33,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.2"
+APP_VERSION = "v0.9.3"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -1701,6 +1701,9 @@ class LauncherLogic:
         # Online hooks environment preparation
         if self.config.get("online_enabled", False):
             env["MH3U_ONLINE_ENABLED"] = "1"
+            # the address typed but not saved still counts (otherwise the default 127.0.0.1 starts a server of its own)
+            if hasattr(self, "entry_server_host") and self.entry_server_host.get().strip():
+                self.config["online_server"] = self.entry_server_host.get().strip()
             is_host = self.config.get("online_mode", "client") == "host"
 
             if is_host:

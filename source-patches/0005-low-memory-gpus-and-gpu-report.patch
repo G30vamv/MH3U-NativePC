@@ -1,0 +1,133 @@
+diff --git a/crates/mh3u-gfx/src/draw.rs b/crates/mh3u-gfx/src/draw.rs
+index b6a34d8..a6e8ba2 100644
+--- a/crates/mh3u-gfx/src/draw.rs
++++ b/crates/mh3u-gfx/src/draw.rs
+@@ -595,6 +595,19 @@ pub(crate) fn keep_stream(used: u32, reused: bool, swaps: u32) -> bool {
+ }
+ 
+ /// The bytes of the vertex streams that have buffers of their own.
++/// Set for an integrated GPU (it shares memory with the system), so the buffer caches stay small there.
++pub(crate) static SMALL_GPU: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++/// Set when the device ran out of memory: the next `prune` drops the buffer caches (their buffers may be invalid).
++pub(crate) static OUT_OF_MEMORY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++fn stream_cap() -> u64 {
++    if SMALL_GPU.load(std::sync::atomic::Ordering::Relaxed) { 128 << 20 } else { 1 << 30 }
++}
++
++fn index_cap() -> u64 {
++    if SMALL_GPU.load(std::sync::atomic::Ordering::Relaxed) { 32 << 20 } else { 256 << 20 }
++}
++
+ fn own_stream_bytes(streams: &HashMap<(u64, u64), StreamEntry>) -> u64 {
+     streams.values().filter(|e| e.own.is_some()).map(|e| e.size).sum()
+ }
+@@ -2080,11 +2093,11 @@ impl Gx2 {
+         // forget what has not been used for a while, or what is too much
+         let swaps = self.swaps;
+         self.caches.stream_bytes += size;
+-        if self.caches.stream_bytes > (1 << 30) {
++        if self.caches.stream_bytes > stream_cap() {
+             let before = self.caches.stream_bytes;
+             self.caches.streams.retain(|k, e| *k == key || keep_stream(e.used, e.reused, swaps));
+             self.caches.stream_bytes = own_stream_bytes(&self.caches.streams) + size;
+-            if self.caches.stream_bytes > before / 2 && self.caches.stream_bytes > (1 << 30) {
++            if self.caches.stream_bytes > before / 2 && self.caches.stream_bytes > stream_cap() {
+                 self.caches.streams.retain(|k, _| *k == key);
+                 self.caches.stream_bytes = size;
+             }
+@@ -2180,7 +2193,7 @@ impl Gx2 {
+         let buffer = self.arena_write(&index_bytes, index_bytes.len() as u64);
+         let count = indices.len() as u32;
+         // forget the lists not used for a while when they take too much
+-        if self.caches.index_bytes > (256 << 20) {
++        if self.caches.index_bytes > index_cap() {
+             self.caches.indices.retain(|_, e| e.used + 120 >= swaps);
+             self.caches.index_bytes = self
+                 .caches
+@@ -2332,6 +2345,14 @@ impl Gx2 {
+         self.caches.spent = std::time::Duration::ZERO;
+         self.caches.decode_spent = std::time::Duration::ZERO;
+         let swaps = self.swaps;
++        if OUT_OF_MEMORY.swap(false, std::sync::atomic::Ordering::Relaxed) {
++            eprintln!("[gfx] out of memory: dropping the buffer caches");
++            self.caches.streams.clear();
++            self.caches.stream_bytes = 0;
++            self.caches.indices.clear();
++            self.caches.index_bytes = 0;
++            self.caches.bind_groups.clear();
++        }
+         let mut lap = Lap::new();
+         // what the workers finished is taken in here, between frames: the next frame draws with it
+         self.collect_decodes(false);
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index a9aaaf8..df0af68 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -50,8 +50,27 @@ pub struct Display {
+ 
+ impl Display {
+     fn new(window: Arc<Window>) -> Result<Display> {
++        // WGPU_BACKEND=dx12|vulkan picks the graphics API (the launcher sets it); anything else leaves wgpu to choose
++        let backends = match std::env::var("WGPU_BACKEND").unwrap_or_default().to_ascii_lowercase().as_str() {
++            "dx12" => wgpu::Backends::DX12,
++            "vulkan" => wgpu::Backends::VULKAN,
++            _ => wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
++        };
++        // DX12 compiles shaders with FXC unless dxcompiler.dll is beside the exe: FXC takes tens of seconds on some pipelines
++        // (Intel iGPUs), DXC far less (MH3U_DX12_COMPILER=fxc keeps FXC)
++        let dxc = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("dxcompiler.dll"))).filter(|p| p.exists());
++        let use_dxc = dxc.is_some() && !std::env::var("MH3U_DX12_COMPILER").is_ok_and(|v| v.eq_ignore_ascii_case("fxc"));
++        let shader_compiler = match dxc {
++            Some(path) if use_dxc => wgpu::Dx12Compiler::DynamicDxc { dxc_path: path.to_string_lossy().into_owned() },
++            _ => wgpu::Dx12Compiler::Fxc,
++        };
++        eprintln!("[gfx] DX12 shader compiler: {}", if use_dxc { "DXC" } else { "FXC" });
+         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+-            backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
++            backends,
++            backend_options: wgpu::BackendOptions {
++                dx12: wgpu::Dx12BackendOptions { shader_compiler, ..Default::default() },
++                ..Default::default()
++            },
+             ..wgpu::InstanceDescriptor::new_without_display_handle()
+         });
+         let surface = instance.create_surface(window.clone()).context("creating the window's surface")?;
+@@ -62,6 +81,22 @@ impl Display {
+             ..Default::default()
+         }))
+         .context("no graphics adapter")?;
++        let info = adapter.get_info();
++        eprintln!("[gfx] adapter: {} ({:?}, {:?}), driver {} {}", info.name, info.backend, info.device_type, info.driver, info.driver_info);
++        let features = adapter.features();
++        let limits = adapter.limits();
++        eprintln!(
++            "[gfx] features: BC {}, float32 filterable {}; limits: texture {}, storage buffers/stage {}, bind groups {}, buffer {} MB",
++            features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
++            features.contains(wgpu::Features::FLOAT32_FILTERABLE),
++            limits.max_texture_dimension_2d,
++            limits.max_storage_buffers_per_shader_stage,
++            limits.max_bind_groups,
++            limits.max_buffer_size >> 20,
++        );
++        if !features.contains(wgpu::Features::FLOAT32_FILTERABLE) {
++            eprintln!("[gfx] warning: this GPU cannot filter 32-bit float textures (the game's shadow maps and light tables use them)");
++        }
+         // the game's shaders read many buffers, use compressed textures and filter 32-bit float ones: ask for what the adapter has
+         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+             required_limits: adapter.limits(),
+@@ -70,7 +105,13 @@ impl Display {
+         }))
+         .context("opening the graphics device")?;
+         // a validation error in one draw is reported, and the game goes on
+-        device.on_uncaptured_error(Arc::new(|e| eprintln!("[gfx] {e}")));
++        device.on_uncaptured_error(Arc::new(|e| {
++            if matches!(e, wgpu::Error::OutOfMemory { .. }) {
++                draw::OUT_OF_MEMORY.store(true, std::sync::atomic::Ordering::Relaxed);
++            }
++            eprintln!("[gfx] {e}")
++        }));
++        draw::SMALL_GPU.store(info.device_type == wgpu::DeviceType::IntegratedGpu, std::sync::atomic::Ordering::Relaxed);
+         Ok(Display {
+             window: Some(window),
+             instance,
