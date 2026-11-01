@@ -811,10 +811,15 @@ class MH3ULauncherApp(LauncherLogic):
         tl.addWidget(self.switch_online)
         tl.addWidget(Label("Selecciona tu función en la partida:", "#9db3ba", 10, bold=True))
         current_mode = self.config.get("online_mode", "client")
-        init_mode = "👑 Crear Servidor de Sala (Host)" if current_mode == "host" else "🎮 Unirse a una Sala (Cliente)"
-        self.seg_online_mode = Segmented(["🎮 Unirse a una Sala (Cliente)", "👑 Crear Servidor de Sala (Host)"], self.on_online_mode_changed, bold=True)
+        init_mode = "👑 Crear mi sala (Host)" if current_mode == "host" else "🎮 Unirme a la sala de un amigo (Cliente)"
+        self.seg_online_mode = Segmented(["🎮 Unirme a la sala de un amigo (Cliente)", "👑 Crear mi sala (Host)"], self.on_online_mode_changed, bold=True)
         self.seg_online_mode.set(init_mode)
         tl.addWidget(self.seg_online_mode)
+        diag_row = QHBoxLayout()
+        diag_row.addWidget(Button("🩺 Diagnóstico de Red", "default", self.run_diagnostics, width=190))
+        diag_row.addWidget(_hint("Revisa el firewall, tu IP y la conexión con tu amigo. Lo que escribas aquí se guarda solo al pulsar JUGAR."))
+        diag_row.addStretch(1)
+        tl.addLayout(diag_row)
         lay.addWidget(top)
 
         # client
@@ -825,7 +830,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.entry_server_host = Entry(width=230)
         self.entry_server_host.insert(0, self.config.get("online_server", "127.0.0.1"))
         host_row.addWidget(self.entry_server_host)
-        self.btn_ping_host = Button("🔍 Probar Ping", "default", self.test_host_ping, width=120)
+        self.btn_ping_host = Button("🔍 Probar Conexión", "default", self.test_host_ping, width=140)
         host_row.addWidget(self.btn_ping_host)
         host_row.addStretch(1)
         c.addLayout(host_row, 1, 1)
@@ -876,7 +881,7 @@ class MH3ULauncherApp(LauncherLogic):
         h.setColumnStretch(1, 1)
         lay.addWidget(self.frame_host_mode)
 
-        save = Button("💾 Guardar Parámetros de Red", "default", self.save_online_settings, height=38)
+        save = Button("💾 Guardar ahora", "default", self.save_online_settings, height=38)
         lay.addWidget(save, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addStretch(1)
 

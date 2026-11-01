@@ -19,6 +19,7 @@ import struct
 import uuid
 import re
 import hidhide
+import netcheck
 from qtshim import END, filedialog, messagebox
 import socket
 import webbrowser
@@ -33,7 +34,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.4"
+APP_VERSION = "v0.9.5"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -407,6 +408,10 @@ class DiscordRPCManager:
 
 class LauncherLogic:
     """Everything the launcher does; the window supplies the widgets and `after`, `destroy` and the clipboard."""
+
+    # the firewall is looked at once per session (when the game is started with online on); this says it was
+    _fw_session_ok = False
+    _fw_checking = False
 
     def load_config(self):
         """Loads configuration from JSON file or returns defaults with auto-detection."""
@@ -799,36 +804,29 @@ class LauncherLogic:
                     self.ui_queue.put(("ping_result", (True, 1, "Localhost listo (Se iniciará automáticamente al pulsar JUGAR)")))
                 return
 
-            try:
-                creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                proc = subprocess.run(
-                    ["ping", "-n", "3", "-w", "3000", host],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    creationflags=creationflags
-                )
-                times = [int(x) for x in re.findall(r"(?:tiempo|time)[=<] *([0-9]+) *ms", proc.stdout or "", re.I)]
-                elapsed = max(1, round(sum(times) / len(times))) if times else 0
-                if proc.returncode == 0 and times:
-                    self.ui_queue.put(("ping_result", (True, elapsed, host)))
-                else:
-                    self.ui_queue.put(("ping_result", (False, 0, f"Host inalcanzable ({host}) - Revisa Radmin VPN")))
-            except Exception as e:
-                self.ui_queue.put(("ping_result", (False, 0, str(e))))
+            # the room server answers on UDP 10025: that, not a ping, shows the friend can really be reached
+            ok, ms = netcheck.udp_probe(host)
+            if ok:
+                self.ui_queue.put(("ping_result", (True, ms, host)))
+                return
+            if netcheck.ping_ms(host):
+                detail = "el PC responde pero su servidor de sala no: que pulse JUGAR o Iniciar Servidor y repare su firewall"
+            else:
+                detail = "sin respuesta: revisa Radmin VPN, la IP y que tu amigo tenga la sala abierta"
+            self.ui_queue.put(("ping_result", (False, 0, detail)))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_ping_result(self, success, elapsed_ms, detail):
-        self.btn_ping_host.configure(text="🔍 Probar Ping", state="normal")
+        self.btn_ping_host.configure(text="🔍 Probar Conexión", state="normal")
         if success:
             self.lbl_ping_result.configure(
-                text=f"🟢 Conexión exitosa al Host (Ping: {elapsed_ms} ms)",
+                text=f"🟢 El servidor de la sala responde ({elapsed_ms} ms)",
                 text_color="#7fcfa6"
             )
         else:
             self.lbl_ping_result.configure(
-                text=f"🔴 No se pudo conectar al Host ({detail})",
+                text=f"🔴 No se pudo conectar ({detail})",
                 text_color="#e0675c"
             )
 
@@ -1062,40 +1060,118 @@ class LauncherLogic:
         res = get_tools_path()
         return res[0] if isinstance(res, tuple) else res
 
+    def _fw_programs(self):
+        return [p for p in (self._tools_exe_path(), self._find_server_exe()) if p and os.path.isfile(p)]
+
+    def _fw_result_path(self):
+        return os.path.join(tempfile.gettempdir(), netcheck.RESULT_FILE)
+
     def _fw_enable_lines(self):
-        g = self.FW_GROUP
-        lines = [
-            f'netsh advfirewall firewall delete rule name=all group="{g}" >nul 2>&1',
-        ]
-        for label, port in (("1223", "1223"), ("1224", "1224"), ("10025", "10025"), ("33335", "33335"), ("relay", "27100-27387")):
-            name = f"{g} UDP {label}" if label != "relay" else f"{g} UDP relay"
-            lines.append(
-                f'netsh advfirewall firewall add rule name="{name}" group="{g}" dir=in action=allow '
-                f'protocol=UDP localport={port} profile=any >nul'
-            )
-        for exe in (self._tools_exe_path(), self._find_server_exe()):
-            if exe and os.path.isfile(exe):
-                lines.append(
-                    f'netsh advfirewall firewall add rule name="{g} {os.path.basename(exe)}" group="{g}" '
-                    f'dir=in action=allow program="{exe}" enable=yes profile=any >nul'
-                )
-        return lines
+        return netcheck.fix_lines(self.FW_GROUP, self._fw_programs(), self._fw_result_path())
+
+    def _ensure_firewall(self, ask):
+        """Look at the firewall for the game and the server; if a Block rule or a missing Allow would stop friends, offer
+        (`ask`) or just do (one UAC) the repair. True when fine, False when it is still wrong, None when it could not be read."""
+        programs = self._fw_programs()
+        rules = netcheck.inspect_rules(programs)
+        if rules is None:
+            self._queue_server_log("[Launcher] No se pudo leer el firewall; se sigue sin comprobarlo.")
+            return None
+        problems = netcheck.analyze_rules(rules, programs)
+        if not problems:
+            self._queue_server_log("[Launcher] Firewall listo para jugar online.")
+            return True
+        for line in netcheck.describe(problems):
+            self._queue_server_log(f"[Launcher] Firewall: {line}")
+        if ask and not messagebox.askyesno(
+            "Firewall de Windows",
+            "Windows podría impedir que tus amigos entren a tu sala:\n\n  - " + "\n  - ".join(netcheck.describe(problems))
+            + "\n\n¿Repararlo ahora? Pide permisos de administrador una sola vez.",
+        ):
+            return False
+        try:
+            os.remove(self._fw_result_path())
+        except OSError:
+            pass
+        if not self._run_elevated_batch(self._fw_enable_lines()):
+            return False
+        problems = netcheck.analyze_rules(netcheck.inspect_rules(programs) or [], programs)
+        if problems:
+            self._queue_server_log("[Launcher] El firewall sigue mal (¿se canceló el permiso de administrador?).")
+            try:
+                with open(self._fw_result_path(), encoding="utf-8", errors="replace") as f:
+                    for line in f.read().strip().splitlines()[:6]:
+                        self._queue_server_log(f"[Launcher] netsh: {line}")
+            except OSError:
+                pass
+            return False
+        self._queue_server_log("[Launcher] Reglas de firewall reparadas (UDP 1223/1224/10025/33335 y los programas del juego).")
+        return True
 
     def prepare_online_environment(self):
-        """Switch ON: open firewall (UAC once), relay policy; host/client then only wait for the IP."""
+        """Switch ON: make the firewall right (UAC once if it is not), relay policy; host/client then only wait for the IP."""
         def worker():
             self._queue_server_log("[Launcher] Preparando entorno online (firewall + relé UDP)...")
-            state = self._fw_rules_state()
-            if state == "enabled":
-                self._queue_server_log("[Launcher] Reglas de firewall MH3U ya activas.")
-            elif state == "disabled":
-                ok = self._run_elevated_batch([f'netsh advfirewall firewall set rule group="{self.FW_GROUP}" new enable=yes >nul'])
-                self._queue_server_log("[Launcher] Reglas de firewall reactivadas." if ok else "[Launcher] No se pudo reactivar el firewall.")
-            else:
-                ok = self._run_elevated_batch(self._fw_enable_lines())
-                self._queue_server_log("[Launcher] Reglas de firewall creadas (UDP 1223/1224/10025/33335/27100-27387)." if ok else "[Launcher] No se pudo crear el firewall.")
+            if self._fw_rules_state() == "disabled":
+                self._run_elevated_batch(netcheck.enable_lines(self.FW_GROUP, self._fw_programs(), True))
+            self._fw_session_ok = bool(self._ensure_firewall(ask=False))
             mode = self.config.get("online_relay", "auto")
             self._queue_server_log(f"[Launcher] Relé UDP: {mode}. Entorno listo: elige tu rol y la IP.")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _check_firewall_then(self, callback):
+        """The check takes a couple of seconds and may ask a question: off the window's thread, then `callback` goes on from there."""
+        if self._fw_checking:
+            return
+        self._fw_checking = True
+
+        def worker():
+            try:
+                self._ensure_firewall(ask=True)
+            except Exception as e:
+                self._queue_server_log(f"[Launcher] Comprobación del firewall omitida: {e}")
+            finally:
+                self._fw_session_ok = True  # asked once: it is not asked again until the next session
+                self._fw_checking = False
+            self.ui_queue.put(("call", (0, callback)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run_diagnostics(self):
+        """A report of what usually stops friends from joining: firewall, networks, the server and the friend's address."""
+        def worker():
+            lines = []
+            programs = self._fw_programs()
+            rules = netcheck.inspect_rules(programs)
+            if rules is None:
+                lines.append("⚠ Firewall: no se pudo leer")
+            else:
+                problems = netcheck.analyze_rules(rules, programs)
+                lines += [f"✖ Firewall: {x}" for x in netcheck.describe(problems)] or ["✔ Firewall: el juego y el servidor pueden recibir conexiones"]
+            for name, cat in netcheck.network_profiles():
+                note = " (normal en Radmin; las reglas de MH3U valen para todas)" if "radmin" in name.lower() else ""
+                lines.append(f"• Red «{name}»: {cat}{note}")
+            ips = [x for x in get_local_ip_addresses() if not x.startswith("127.")]
+            lines.append("• Tus IP: " + (", ".join(ips) if ips else "ninguna aparte de 127.0.0.1 (¿Radmin VPN conectado?)"))
+            host_mode = self.config.get("online_mode", "client") == "host"
+            if host_mode:
+                ok, ms = netcheck.udp_probe("127.0.0.1")
+                lines.append(f"{'✔' if ok else '✖'} Tu servidor de sala: " + (f"responde ({ms} ms)" if ok else "no responde (pulsa Iniciar Servidor o JUGAR)"))
+                if not self._host_public_ip():
+                    lines.append("✖ Sin IP de Radmin/LAN para tus amigos: elige una en «Tu IP para amigos»")
+            else:
+                target = (self.entry_server_host.get().strip() if hasattr(self, "entry_server_host") else "") or self.config.get("online_server", "")
+                if target in ("", "127.0.0.1", "localhost"):
+                    lines.append("✖ Falta la IP de tu amigo")
+                else:
+                    ok, ms = netcheck.udp_probe(target)
+                    lines.append(f"{'✔' if ok else '✖'} Servidor de {target}: " + (f"responde ({ms} ms)" if ok else "sin respuesta (¿sala abierta? ¿firewall del anfitrión? ¿Radmin?)"))
+            server_exe = self._find_server_exe()
+            if host_mode and server_exe:
+                seen = netcheck.traversal_results(os.path.join(os.path.dirname(server_exe), "server.log"))
+                lines.append("• Conexiones entre jugadores vistas por el servidor: " + (f"{len(seen)} recientes, la última: {seen[-1][-70:]}" if seen else "ninguna todavía"))
+            for ln in lines:
+                self._queue_server_log("[Diagnóstico] " + ln)
+            self.ui_queue.put(("info", ("Diagnóstico de red", "\n".join(lines))))
         threading.Thread(target=worker, daemon=True).start()
 
     def teardown_online_environment(self):
@@ -1109,7 +1185,7 @@ class LauncherLogic:
 
         def worker():
             if self._fw_rules_state() == "enabled":
-                self._run_elevated_batch([f'netsh advfirewall firewall set rule group="{self.FW_GROUP}" new enable=no >nul'])
+                self._run_elevated_batch(netcheck.enable_lines(self.FW_GROUP, self._fw_programs(), False))
                 self._queue_server_log("[Launcher] Entorno online desactivado (firewall y servidor).")
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1126,7 +1202,8 @@ class LauncherLogic:
         self.save_config()
         self.refresh_status()
 
-    def save_online_settings(self):
+    def collect_online_settings(self):
+        """What is typed in the Online tab goes into the config (also when JUGAR is pressed, so Guardar is not needed)."""
         self.config["online_enabled"] = bool(self.switch_online.get())
         mode_val = self.seg_online_mode.get()
         self.config["online_mode"] = "host" if "Host" in mode_val else "client"
@@ -1146,6 +1223,8 @@ class LauncherLogic:
         room_val = self.entry_host_room.get().strip() if self.config["online_mode"] == "host" else self.entry_room_id.get().strip()
         self.config["online_room_id"] = room_val or "1001"
 
+    def save_online_settings(self):
+        self.collect_online_settings()
         self.save_config()
         self.refresh_status()
         messagebox.showinfo("Configuración Online", "Parámetros de red y salas guardados correctamente.")
@@ -1618,6 +1697,22 @@ class LauncherLogic:
             ):
                 self.start_build_process()
             return
+
+        # what is typed in the Online tab counts without pressing Guardar; with online on, the firewall is looked at once per session
+        if hasattr(self, "switch_online"):
+            self.collect_online_settings()
+            self.save_config()
+        if self.config.get("online_enabled", False):
+            if not self._fw_session_ok:
+                self._check_firewall_then(self.launch_game)
+                return
+            if self.config.get("online_mode", "client") == "host" and not self._host_public_ip():
+                if not messagebox.askyesno(
+                    "Sin IP para tus amigos",
+                    "No hay una IP de Radmin VPN o de tu red para que tus amigos se conecten: solo podrías jugar tú.\n\n"
+                    "Conecta Radmin VPN y elige tu IP en «Tu IP para amigos». ¿Jugar así de todos modos?",
+                ):
+                    return
 
         self._offer_hidhide_access()
 

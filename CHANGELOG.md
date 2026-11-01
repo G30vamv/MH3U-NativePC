@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.5] - 2026-10-31
+
+### Fixed
+- **Firewall permissions never got created.** The launcher was meant to open Windows' firewall for the game and the room server when you switched online on, but the command it used was rejected by Windows without any message, so nothing was ever set up. That is why Windows' "Allow access" windows kept appearing, only for some of you, and why friends could be left out (Radmin VPN counts as a "public" network). It now works: when you press PLAY with online on, the launcher checks the firewall and, if the game is blocked or not allowed on every network, fixes it with a single administrator confirmation. It also removes the "Block" rules Windows creates when "Cancel" is pressed on its window.
+
+### Changed
+- **Easier room setup.** The room, address and name you type in the Online tab are used when you press PLAY; "Save" is no longer needed. The launcher warns you if you host a room without an address your friends can reach.
+- **"Test connection"** now asks the room's server itself instead of sending a ping, so it shows whether your friend can really be reached.
+
+### Added
+- **Network diagnosis** button in the Online tab: checks the firewall, your addresses and the connection with your friend, and says what to fix.
+
 ## [0.9.4] - 2026-10-31
 
 ### Fixed
