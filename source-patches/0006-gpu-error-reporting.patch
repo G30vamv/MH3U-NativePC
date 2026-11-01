@@ -1,0 +1,21 @@
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index df0af68..16e60d7 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -109,8 +109,15 @@ impl Display {
+             if matches!(e, wgpu::Error::OutOfMemory { .. }) {
+                 draw::OUT_OF_MEMORY.store(true, std::sync::atomic::Ordering::Relaxed);
+             }
+-            eprintln!("[gfx] {e}")
++            // once a buffer is invalid every write to it fails: say the first ones and then only now and then
++            static ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++            let n = ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            if n < 30 || n % 2000 == 0 {
++                eprintln!("[gfx] {e} (graphics error #{n})");
++            }
+         }));
++        // a lost device (the driver reset the GPU, ...) leaves every resource invalid: this tells why
++        device.set_device_lost_callback(|reason, message| eprintln!("[gfx] DEVICE LOST ({reason:?}): {message}"));
+         draw::SMALL_GPU.store(info.device_type == wgpu::DeviceType::IntegratedGpu, std::sync::atomic::Ordering::Relaxed);
+         Ok(Display {
+             window: Some(window),

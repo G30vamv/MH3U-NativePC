@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.4] - 2026-10-31
+
+### Fixed
+- The log no longer fills up with thousands of repeated graphics errors when the picture freezes, and it now says why the graphics card stopped working. This helps find the cause of the picture freezing for some players while the sound and the online session keep going.
+
 ## [0.9.3] - 2026-10-31
 
 ### Fixed
