@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.6] - 2026-11-01
+
+### Fixed
+- **Characters have their right colours again.** Your hunter, your Palico and the monsters were drawn with a cold blue-green tint, as if a cyan lamp was lighting them, and some looked plain green (the Great Jaggi, the fish...). Armour, skin and fur now look like they do on the console. Scenery was never affected.
+- The first time you play after updating, the game rebuilds its graphics cache, so the first scenes may stutter a little. It happens only once.
+
 ## [0.9.5] - 2026-10-31
 
 ### Fixed
@@ -15,6 +21,7 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 
 ### Added
 - **Network diagnosis** button in the Online tab: checks the firewall, your addresses and the connection with your friend, and says what to fix.
+- You can play in the same room as friends who use Cemu, through MH3U Revival.
 
 ## [0.9.4] - 2026-10-31
 

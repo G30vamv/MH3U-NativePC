@@ -25,6 +25,8 @@ python tools/publish_release.py --version v0.9.0 --dir "<distributable folder>" 
 
 Requires an authenticated `gh`. `--dry-run` only builds the zip; `--replace` replaces the assets of an existing release. Push `main` first: the release tag is created on it.
 
+The script empties `dist-release/` before it writes the new zip, so do not keep test folders or older zips there.
+
 **Rule:** the Release page shows **only `MH3U_Port_Launcher_<version>.zip`** (everything needed to run: launcher, `mh3u-tools.exe`, `server.exe`, `libunwind.dll`, assets, guides, `LICENSE.txt`, `SOURCE.txt`, `mods/hooks.txt`), plus a tiny `manifest.json` read only by the updater, kept only on the latest release. Release notes must say "download only the zip". Titles and notes are written in English.
 
 The script:

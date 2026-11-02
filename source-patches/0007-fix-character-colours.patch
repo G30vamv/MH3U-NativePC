@@ -1,0 +1,228 @@
+diff --git a/crates/mh3u-gfx/src/draw.rs b/crates/mh3u-gfx/src/draw.rs
+index a6e8ba2..6bd562f 100644
+--- a/crates/mh3u-gfx/src/draw.rs
++++ b/crates/mh3u-gfx/src/draw.rs
+@@ -1150,7 +1150,7 @@ impl Gx2 {
+         }
+         let constants = loop_constants(g, g.u32(vs + 0xf4), g.u32(vs + 0xf8));
+         let disk_key = (self.caches.translations.is_open() && !self.diag.keeps_shaders())
+-            .then(|| translation_key("vs1", &code, &(fetch, half_z, vertex_semantics(g, vs), &constants)));
++            .then(|| translation_key("vs2", &code, &(fetch, half_z, vertex_semantics(g, vs), &constants)));
+         if let Some(c) = self.found_on_disk("vertex shader", disk_key) {
+             self.caches.vertex.insert(key, Some(c.clone()));
+             return Some(Some(c));
+@@ -1233,6 +1233,11 @@ impl Gx2 {
+             count,
+             flat: Vec::new(),
+             locations: Vec::new(),
++            // `SPI_PS_IN_CONTROL_0`: bit 8 `POSITION_ENA`, bits 10 to 14 `POSITION_ADDR` (the register the fragment position goes to)
++            position: {
++                let control = g.u32(ps + 8);
++                ((control >> 8) & 1 != 0).then_some((control >> 10) & 0x1f)
++            },
+         };
+         for i in 0..count {
+             let cntl = g.u32(ps + 0x14 + 4 * i);
+@@ -1246,7 +1251,7 @@ impl Gx2 {
+         g.read(program, &mut code);
+         let key = (
+             ps,
+-            hash_fast(&code, 0) ^ hash_of(&(inputs.count, &inputs.flat, &inputs.locations, variant)),
++            hash_fast(&code, 0) ^ hash_of(&(inputs.count, &inputs.flat, &inputs.locations, inputs.position, variant)),
+         );
+         if let Some(c) = self.caches.pixel.get(&key) {
+             return Some(c.clone());
+@@ -1257,7 +1262,13 @@ impl Gx2 {
+             && !self.diag.keeps_shaders()
+             && !solid
+             && debug_ps(ps) == mh3u_latte::translate::DebugPs::Off)
+-            .then(|| translation_key("ps1", &code, &(&inputs.count, &inputs.flat, &inputs.locations, variant, &constants)));
++            .then(|| {
++                translation_key(
++                    "ps2",
++                    &code,
++                    &(&inputs.count, &inputs.flat, &inputs.locations, inputs.position, variant, &constants),
++                )
++            });
+         if let Some(c) = self.found_on_disk("pixel shader", disk_key) {
+             self.caches.pixel.insert(key, Some(c.clone()));
+             return Some(Some(c));
+diff --git a/crates/mh3u-latte/src/translate.rs b/crates/mh3u-latte/src/translate.rs
+index 4bc9940..514c347 100644
+--- a/crates/mh3u-latte/src/translate.rs
++++ b/crates/mh3u-latte/src/translate.rs
+@@ -71,6 +71,9 @@ pub struct PixelInputs {
+     pub flat: Vec<bool>,
+     /// The location of the vertex shader output each input comes from (input `i` by default).
+     pub locations: Vec<u32>,
++    /// The register that receives the fragment position (x, y, depth, 1/w) when the program asks for it (`POSITION_ENA` of
++    /// `SPI_PS_IN_CONTROL_0` and its `POSITION_ADDR`), as Cemu seeds it; no register reads as zero.
++    pub position: Option<u32>,
+ }
+ 
+ /// What a translation needs to know besides the program.
+@@ -385,6 +388,17 @@ fn slots(group: &Group) -> Vec<usize> {
+     out
+ }
+ 
++/// The result of an instruction with its own output modifier (`omod`: times 2, times 4 or divided by 2) and clamp applied.
++fn with_modifiers(e: String, i: &AluInst) -> String {
++    let e = match i.omod {
++        1 => format!("({e} * 2.0)"),
++        2 => format!("({e} * 4.0)"),
++        3 => format!("({e} * 0.5)"),
++        _ => e,
++    };
++    if i.clamp { format!("sat({e})") } else { e }
++}
++
+ impl Gen<'_> {
+     fn alu_group(&mut self, g: &Group, indent: usize) {
+         let slot_of = slots(g);
+@@ -429,8 +443,8 @@ impl Gen<'_> {
+                 format!("cube.{}", swz(slot as u32))
+             } else if reduction && ops::op2(i.op).is_some_and(|t| t.3 == Slots::Reduction) {
+                 if reduction_done {
+-                    // every slot of the group gets the same result
+-                    results.push((slot, "red".to_string()));
++                    // every slot of the group gets the same result, each with its own output modifier and clamp
++                    results.push((slot, with_modifiers("red".to_string(), i)));
+                     continue;
+                 }
+                 reduction_done = true;
+@@ -469,17 +483,7 @@ impl Gen<'_> {
+                 }
+             };
+             self.index_mode = i.index_mode;
+-            let mut e = expr;
+-            e = match i.omod {
+-                1 => format!("({e} * 2.0)"),
+-                2 => format!("({e} * 4.0)"),
+-                3 => format!("({e} * 0.5)"),
+-                _ => e,
+-            };
+-            if i.clamp {
+-                e = format!("sat({e})");
+-            }
+-            results.push((slot, e));
++            results.push((slot, with_modifiers(expr, i)));
+         }
+         // evaluate, then write
+         let mut names = Vec::new();
+@@ -1175,7 +1179,10 @@ fn assemble_pixel(m: &mut String, g: &Gen, inputs: &PixelInputs) {
+     m.push_str("@fragment fn main(in: In) -> Out {\n");
+     for n in 0..g.max_gpr {
+         let fed = inputs.locations.get(n as usize).copied().unwrap_or(n) != u32::MAX;
+-        let init = if n < inputs.count && fed {
++        let init = if inputs.position == Some(n) {
++            // the fragment position as the hardware hands it over: x, y, depth and 1 / w (WGSL's `position.w` is 1 / w)
++            "vec4<f32>(in.frag.x, in.frag.y, in.frag.z, 1.0 / in.frag.w)".to_string()
++        } else if n < inputs.count && fed {
+             format!("in.i{n}")
+         } else {
+             "vec4<f32>(0.0)".to_string()
+@@ -1536,6 +1543,7 @@ mod tests {
+                 count: 2,
+                 flat: vec![],
+                 locations: vec![],
++                position: None,
+             },
+             &ctx,
+         )
+@@ -1546,6 +1554,48 @@ mod tests {
+         assert!(!t.interface.kills);
+     }
+ 
++    /// One group of four `DOT4` (r1.x, r1.y, r1.z, r1.w against 1.0), each with the output modifier "divide by 2", writing r0.xyzw.
++    fn dot_product_group() -> Vec<u8> {
++        let mut program = vec![
++            2,
++            (8 << 26) | (3 << 18),
++            0,
++            (0x28 << 23) | (1 << 21) | (3 << 9) | (2 << 6) | (1 << 3),
++        ];
++        for k in 0..4u32 {
++            program.push(1 | (k << 10) | (249 << 13) | if k == 3 { 1 << 31 } else { 0 });
++            program.push((0x50 << 7) | (1 << 4) | (3 << 5) | (k << 29));
++        }
++        words(&program)
++    }
++
++    #[test]
++    fn every_slot_of_a_dot_product_group_keeps_its_own_output_modifier() {
++        let d = decode(&dot_product_group()).unwrap();
++        let ctx = Context::new(&|_| TexKind::D2);
++        let t = translate_pixel(&d, &PixelInputs::default(), &ctx).unwrap();
++        // the four slots share the product but each one is divided by two, not only the first
++        assert_eq!(t.wgsl.matches("(red * 0.5)").count(), 4, "{}", t.wgsl);
++    }
++
++    #[test]
++    fn a_program_that_asks_for_the_fragment_position_gets_it_in_that_register() {
++        let d = decode(&sample()).unwrap();
++        let ctx = Context::new(&|_| TexKind::D2);
++        let inputs = PixelInputs {
++            count: 2,
++            flat: vec![],
++            locations: vec![],
++            position: Some(1),
++        };
++        let t = translate_pixel(&d, &inputs, &ctx).unwrap();
++        assert!(
++            t.wgsl.contains("vec4<f32>(in.frag.x, in.frag.y, in.frag.z, 1.0 / in.frag.w)"),
++            "{}",
++            t.wgsl
++        );
++    }
++
+     #[test]
+     fn what_is_not_known_is_an_error_not_a_guess() {
+         let mut p = sample();
+@@ -1610,6 +1660,7 @@ mod tests {
+             count: 2,
+             flat: vec![],
+             locations: vec![],
++            position: None,
+         };
+         let t = translate_pixel(&d, &inputs, &ctx).unwrap();
+         valid(&t.wgsl);
+@@ -1663,6 +1714,7 @@ mod tests {
+             count: 2,
+             flat: vec![],
+             locations: vec![],
++            position: None,
+         };
+         let mut ctx = Context::new(&|_| TexKind::D2);
+         ctx.alpha_test = Some((4, 0.0));
+@@ -1721,6 +1773,7 @@ mod tests {
+             count: 2,
+             flat: vec![],
+             locations: vec![],
++            position: None,
+         };
+         for (endian, wanted) in [
+             (0, "let e = cb1[min(iu(r1.x)"),
+diff --git a/crates/mh3u-tools/src/latte_check.rs b/crates/mh3u-tools/src/latte_check.rs
+index e9eb777..1ea6331 100644
+--- a/crates/mh3u-tools/src/latte_check.rs
++++ b/crates/mh3u-tools/src/latte_check.rs
+@@ -15,6 +15,7 @@ pub fn wgsl(pack: &[u8], show: Option<usize>) -> Result<()> {
+         count: 8,
+         flat: vec![false; 8],
+         locations: Vec::new(),
++        position: None,
+     };
+     let (mut ok, mut untranslated, mut invalid) = (0, BTreeMap::<String, usize>::new(), 0);
+     let mut first_invalid = None;
+diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
+index c3a96e7..704663f 100644
+--- a/crates/mh3u-tools/src/main.rs
++++ b/crates/mh3u-tools/src/main.rs
+@@ -350,6 +350,7 @@ fn main() -> Result<()> {
+                         count: 8,
+                         flat: vec![false; 8],
+                         locations: Vec::new(),
++                        position: None,
+                     },
+                     &ctx,
+                 )

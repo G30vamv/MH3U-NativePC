@@ -3,7 +3,7 @@
 `mh3u-tools.exe` in the Releases is built from [glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port) (AGPL-3.0) plus the changes in these patches. The patches are under **AGPL-3.0**, like the original project.
 
 - **Base:** commit `41d3a9b` of `glinesbdev/mh3u-port` (26 Oct 2026, *Merge pull request #34*).
-- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004` and `0006` after `0005`.
+- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005` and `0007` after `0006`.
 
 | Patch | Contents |
 |---|---|
@@ -13,6 +13,7 @@
 | `0004-ingame-settings.patch` | The in-game settings window (F1 / F2) in the overlay (`settings.rs`, `overlay.rs`, `gx2.rs`): resolution, upscaler, sharpness, present mode, FPS counter, language and camera sensitivity; text for the game's keyboard prompts (`swkbd.rs`); right-stick sensitivity (`input.rs`). |
 | `0005-low-memory-gpus-and-gpu-report.patch` | Smaller buffer caches on integrated GPUs and recovery when the device runs out of memory (`draw.rs`); the graphics API picked with `WGPU_BACKEND` is honoured, an optional DXC shader compiler for DX12 (`dxcompiler.dll` beside the exe) and the adapter / features lines in the log (`lib.rs`). |
 | `0006-gpu-error-reporting.patch` | Says in the log why the graphics device was lost and no longer floods it with repeated graphics errors (`lib.rs`). |
+| `0007-fix-character-colours.patch` | Fixes the colours of characters (a cold blue-green tint): in a group of dot products the output modifier (times 2, times 4, divided by 2) and clamp of the instructions after the first were skipped, and pixel shaders that ask for the fragment position now receive it (the fog depth of characters) (`translate.rs`, with tests; `draw.rs`). Also renews the on-disk shader translation cache. |
 
 ## Reproducing the binary
 
@@ -26,7 +27,8 @@ git apply --ignore-whitespace <path>/0003-gamepad-hid-support.patch
 git apply --ignore-whitespace <path>/0004-ingame-settings.patch
 git apply --ignore-whitespace <path>/0005-low-memory-gpus-and-gpu-report.patch
 git apply --ignore-whitespace <path>/0006-gpu-error-reporting.patch
+git apply --ignore-whitespace <path>/0007-fix-character-colours.patch
 cargo build --release -p mh3u-tools
 ```
 
-Verified: the six patches apply cleanly on `41d3a9b`, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.
+Verified: the seven patches apply cleanly on `41d3a9b`, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.
