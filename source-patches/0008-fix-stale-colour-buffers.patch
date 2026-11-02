@@ -1,0 +1,141 @@
+diff --git a/crates/mh3u-gfx/src/draw.rs b/crates/mh3u-gfx/src/draw.rs
+index 6bd562f..fc8b9bd 100644
+--- a/crates/mh3u-gfx/src/draw.rs
++++ b/crates/mh3u-gfx/src/draw.rs
+@@ -1630,6 +1630,31 @@ impl Gx2 {
+         )
+     }
+ 
++    /// The colour buffer a draw samples when the texture `t` (a `GX2Texture`) points at `image`: the one the game drew into there,
++    /// unless the texture has another size than that buffer. Then the game put an ordinary texture (a leaf, say) in the memory the
++    /// buffer used before, and the buffer's old picture (a screen capture) must not be drawn on it.
++    pub(crate) fn sampled_target(&self, g: &Guest, t: u32, image: u32) -> Option<&crate::gx2::Target> {
++        let target = self.targets.get(&image)?;
++        let size = (g.u32(t + 4), g.u32(t + 8));
++        if t == 0 || target.guest_size == size {
++            return Some(target);
++        }
++        Lap::count("render targets not sampled: another texture in their memory", 1);
++        // said once for each buffer and texture size (the log shows when the game reused a buffer's memory)
++        static SAID: std::sync::Mutex<Vec<(u32, (u32, u32))>> = std::sync::Mutex::new(Vec::new());
++        if let Ok(mut said) = SAID.lock()
++            && said.len() < 64
++            && !said.contains(&(image, size))
++        {
++            said.push((image, size));
++            eprintln!(
++                "[gfx] the colour buffer at {image:#x} ({}x{}) is not drawn on a {}x{} texture read from the same memory",
++                target.guest_size.0, target.guest_size.1, size.0, size.1
++            );
++        }
++        None
++    }
++
+     /// `GX2Invalidate` of texture memory: the textures it overlaps are checked against their bytes at their next use.
+     pub(crate) fn invalidate_textures(&mut self, address: u32, size: u32) {
+         let end = address.saturating_add(size);
+@@ -2653,7 +2678,7 @@ impl Gx2 {
+                 let image = if t != 0 { g.u32(t + 0x24) } else { 0 };
+                 // a render target the game drew into is what a later pass samples
+                 if k == TexKind::D2
+-                    && let Some(target) = self.targets.get(&image)
++                    && let Some(target) = self.sampled_target(g, t, image)
+                 {
+                     {
+                         if image != draw_image {
+@@ -3611,6 +3636,7 @@ mod tests {
+                 texture,
+                 format: wgpu::TextureFormat::R32Float,
+                 view,
++                guest_size: (4, 4),
+             },
+         );
+         let _ = gx2.depth_copy_view(image);
+@@ -3625,6 +3651,48 @@ mod tests {
+         gx2.end_pass();
+     }
+ 
++    #[test]
++    fn a_texture_in_the_memory_of_an_old_colour_buffer_is_not_replaced_by_the_buffer() {
++        let mut gx2 = Gx2::new(crate::Display::noop());
++        let image = 0xf561_e800;
++        let texture = gx2.d.device.create_texture(&wgpu::TextureDescriptor {
++            label: None,
++            size: wgpu::Extent3d {
++                width: 16,
++                height: 16,
++                depth_or_array_layers: 1,
++            },
++            mip_level_count: 1,
++            sample_count: 1,
++            dimension: wgpu::TextureDimension::D2,
++            format: wgpu::TextureFormat::Rgba8Unorm,
++            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
++            view_formats: &[],
++        });
++        let view = texture.create_view(&Default::default());
++        gx2.targets.insert(
++            image,
++            crate::gx2::Target {
++                texture,
++                format: wgpu::TextureFormat::Rgba8Unorm,
++                view,
++                guest_size: (1920, 1080),
++            },
++        );
++        let mut m = vec![0u8; 0x400];
++        let g = Guest::new(m.as_mut_ptr());
++        // a GX2Texture at 0x100 whose image is the buffer's memory: first the buffer itself (1920x1080), then a 256x256 leaf there
++        g.put_u32(0x124, image);
++        for (width, height, is_buffer) in [(1920u32, 1080u32, true), (256, 256, false), (1920, 540, false)] {
++            g.put_u32(0x104, width);
++            g.put_u32(0x108, height);
++            assert_eq!(gx2.sampled_target(&g, 0x100, image).is_some(), is_buffer, "{width}x{height}");
++        }
++        // nothing drawn into there: no buffer at all
++        assert!(gx2.sampled_target(&g, 0x100, image + 0x1000).is_none());
++        gx2.end_pass();
++    }
++
+     fn stream(location: u32, offset: u32, format: u32) -> AttribStream {
+         AttribStream {
+             location,
+diff --git a/crates/mh3u-gfx/src/gx2.rs b/crates/mh3u-gfx/src/gx2.rs
+index ace53ca..a7c8af7 100644
+--- a/crates/mh3u-gfx/src/gx2.rs
++++ b/crates/mh3u-gfx/src/gx2.rs
+@@ -172,6 +172,9 @@ pub(crate) struct Target {
+     pub(crate) format: wgpu::TextureFormat,
+     /// The whole texture as one view, made with it (draws into it and samples of it use this).
+     pub(crate) view: wgpu::TextureView,
++    /// The size the game gave the colour buffer (before the render scale): a texture read from the same address with another size is
++    /// something else the game later put in that memory, not this buffer.
++    pub(crate) guest_size: (u32, u32),
+ }
+ 
+ pub struct Gx2 {
+@@ -528,6 +531,7 @@ impl Gx2 {
+         if width == 0 || height == 0 || width > 8192 || height > 8192 {
+             return None;
+         }
++        let guest_size = (width, height);
+         let scale = target_scale(width, height, self.render_scale, self.max_texture_dimension_2d);
+         let (width, height) = (width * scale, height * scale);
+         let format = texture_format(format);
+@@ -554,7 +558,15 @@ impl Gx2 {
+                 view_formats: &[],
+             });
+             let view = texture.create_view(&Default::default());
+-            self.targets.insert(image, Target { texture, format, view });
++            self.targets.insert(
++                image,
++                Target {
++                    texture,
++                    format,
++                    view,
++                    guest_size,
++                },
++            );
+         }
+         Some(image)
+     }

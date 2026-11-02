@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.7] - 2026-11-02
+
+### Fixed
+- **Strange pictures on top of the scenery after a hunt.** When you finished a monster, the game keeps a picture of the last hit for the results screen. Later, some other texture (the bushes of the next quest, the title screen...) could end up drawn with that picture. Textures now always show their own image.
+
 ## [0.9.6] - 2026-11-01
 
 ### Fixed
