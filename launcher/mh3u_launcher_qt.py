@@ -29,6 +29,7 @@ import qttitle
 import winfx
 from core import (
     APP_VERSION,
+    CHEATS,
     DEFAULT_OUT_DIR,
     LauncherLogic,
     get_assets_dir,
@@ -662,6 +663,33 @@ class MH3ULauncherApp(LauncherLogic):
         if self.config.get("discord_rpc", True):
             self.chk_discord_rpc.select()
         r.addWidget(self.chk_discord_rpc)
+
+        r.addWidget(Label("Trucos (cheats)", "#e07a6f", 10.5, bold=True))
+        warn = _hint("⚠ Pueden alterar o corromper tu partida guardada. Haz una copia antes (pestaña «Partidas & Logs») y úsalos bajo tu propia decisión.", "#eab84c")
+        warn.setWordWrap(True)
+        r.addWidget(warn)
+        self.chk_cheats = CheckBox("Activar trucos al jugar", self.on_cheats_master_toggled)
+        if self.config.get("cheats_enabled", False):
+            self.chk_cheats.select()
+        r.addWidget(self.chk_cheats)
+        self.chk_cheat, self.entry_cheat = {}, {}
+        for c in CHEATS:
+            row = QHBoxLayout()
+            chk = CheckBox(c["label"], self.save_cheats_from_ui)
+            if self.config.get(f"cheat_{c['id']}", False):
+                chk.select()
+            self.chk_cheat[c["id"]] = chk
+            row.addWidget(chk)
+            if c.get("value"):
+                row.addWidget(Label("×", None, 10.5, bold=True))
+                entry = Entry(width=76)
+                entry.insert(0, self.config.get(f"cheat_{c['id']}_value", c["value"]["default"]))
+                entry.on_change(self.save_cheats_from_ui)
+                self.entry_cheat[c["id"]] = entry
+                row.addWidget(entry)
+            row.addStretch(1)
+            r.addLayout(row)
+            r.addWidget(_hint(c["hint"]))
         r.addStretch(1)
         cols.addWidget(right, 1, Qt.AlignmentFlag.AlignTop)
         return _transparent_scroll(inner)

@@ -38,3 +38,7 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an 
 0x02144998 help_set_alt       # f_02144998(ui, text): the help line's other setter (Ghidra; f_026636d4 takes it when S+0x18 is set, lr 0x2663c34). MH3U_NATIVE_MENU swaps it on the Mods page
 0x02af349c vis_set            # f_02af349c(pane, shown): a layout pane's visibility (Ghidra). MH3U_NATIVE_MENU keeps the Combo List's description box shown on the Mods page
 0x0262115c guide_set          # f_0262115c(guide, mode): the button hints (Ghidra; from f_0265b148, modes 0x22-0x25 for the Combo List). MH3U_NATIVE_MENU sets mode 0 (none) on the Mods page
+
+# Cheats (the launcher's Cheats section; mh3u-rt/src/cheats.rs). Addresses of the update's executable, read with Ghidra (docs/ghidra.md).
+0x02129ef4 hit_resolve           # f_02129ef4: resolves ONE hit; r5 = the hit record: byte +6 = attacker kind (0 hunter, 1 monster), float +0x44 = base damage
+0x0285f530 sharp_change          # f_0285f530(hunter, change, flag): adds `change` to the weapon's sharpness (negative = it wears)

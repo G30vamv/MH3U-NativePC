@@ -43,7 +43,55 @@ UPDATE_BTN_READY = ("#b8791e", "#d4922a")
 
 # Bump when the translator output changes (e.g. more functions discovered). A game.dll built
 # by an older translator lacks functions the online code needs ("not a translated function").
-TRANSLATOR_REV = "2"
+TRANSLATOR_REV = "3"  # 3: the cheats' hooks (hit_resolve, sharp_change) are in mods/hooks.txt
+
+# The launcher's Cheats section. The engine reads the ones that are on from MH3U_CHEATS (mh3u-rt/src/cheats.rs). To add a cheat: a row
+# here, its callback in cheats.rs and its hook in package/mods/hooks.txt. "value" is for a cheat with a multiplier.
+CHEATS = [
+    {
+        "id": "onehit",
+        "label": "One Hit Kill (tus golpes hacen ×N de daño)",
+        "hint": "💡 Con ×1000 casi todo cae de un golpe. Solo cuenta tu daño, no el de otros jugadores.",
+        "value": {"default": 1000, "min": 2, "max": 100000},
+    },
+    {"id": "sharp", "label": "Filo infinito", "hint": "💡 El filo del arma no baja nunca."},
+    {"id": "god", "label": "Invencible (los monstruos hacen 0 de daño)", "hint": "💡 Los golpes de los monstruos no quitan vida; pueden seguir empujándote o aturdiéndote."},
+    {
+        "id": "money",
+        "label": "Más zenny (todo lo que ganes ×N)",
+        "hint": "💡 Se multiplican las ganancias (recompensas, ventas); los gastos no cambian.",
+        "value": {"default": 10, "min": 2, "max": 1000},
+    },
+    {"id": "items", "label": "Objetos infinitos (los que usas en misión no se gastan)", "hint": "💡 Pociones, trampas, piedras de afilar... usados dentro de una misión."},
+]
+
+CHEATS_WARNING = (
+    "Los trucos cambian lo que pasa dentro del juego y pueden alterar, o incluso corromper, tu partida guardada "
+    "(objetos, dinero, progreso).\n\n"
+    "Haz una copia antes con «Respaldar Partidas Ahora» (pestaña «Partidas & Logs») y úsalos bajo tu propia decisión: "
+    "nadie puede deshacer por ti lo que un truco haya escrito en tu partida.\n\n¿Activar los trucos?"
+)
+
+
+def cheat_value(config, cheat):
+    """The multiplier of a cheat that has one, from the configuration, kept inside its limits."""
+    spec = cheat["value"]
+    try:
+        v = int(float(config.get(f"cheat_{cheat['id']}_value", spec["default"])))
+    except (TypeError, ValueError):
+        v = spec["default"]
+    return max(spec["min"], min(spec["max"], v))
+
+
+def build_cheats_env(config):
+    """The value of MH3U_CHEATS ("onehit=1000,sharp"): the cheats that are on, if the section is on; "" when none."""
+    if not config.get("cheats_enabled", False):
+        return ""
+    parts = []
+    for c in CHEATS:
+        if config.get(f"cheat_{c['id']}", False):
+            parts.append(f"{c['id']}={cheat_value(config, c)}" if c.get("value") else c["id"])
+    return ",".join(parts)
 
 # Where the game keeps what the player changed in its F1 overlay (Settings window). The launcher takes it into its own
 # configuration the next time it starts or launches the game, and deletes the file: the launcher's settings stay the one place that rules.
@@ -470,7 +518,14 @@ class LauncherLogic:
             "gpu_thread": "auto",
             "ui_language": "auto",
             "right_stick_sens": 100,
+            # Cheats section (off until the player turns it on and reads the warning)
+            "cheats_enabled": False,
+            "cheats_warned": False,
         }
+        for c in CHEATS:
+            defaults[f"cheat_{c['id']}"] = False
+            if c.get("value"):
+                defaults[f"cheat_{c['id']}_value"] = c["value"]["default"]
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -781,6 +836,24 @@ class LauncherLogic:
         if self.config["native_menu"]:
             mods_text += " + Menú Nativo"
         self.lbl_quick_mods.configure(text=f"Mods: {mods_text}")
+
+    def save_cheats_from_ui(self):
+        """The Cheats section's check boxes and multipliers go into the configuration."""
+        for c in CHEATS:
+            self.config[f"cheat_{c['id']}"] = bool(self.chk_cheat[c["id"]].get())
+            if c.get("value"):
+                self.config[f"cheat_{c['id']}_value"] = cheat_value({f"cheat_{c['id']}_value": self.entry_cheat[c["id"]].get().strip()}, c)
+        self.save_config()
+
+    def on_cheats_master_toggled(self):
+        """Turning the section on asks (once) whether the player understands the risk to the save."""
+        if self.chk_cheats.get() and not self.config.get("cheats_warned", False):
+            if not messagebox.askyesno("Trucos", CHEATS_WARNING):
+                self.chk_cheats.deselect()
+                return
+            self.config["cheats_warned"] = True
+        self.config["cheats_enabled"] = bool(self.chk_cheats.get())
+        self.save_config()
 
     def on_online_mode_changed(self, value):
         if "Host" in value:
@@ -1923,6 +1996,10 @@ class LauncherLogic:
             env["MH3U_ONLINE_ROOM"] = str(self.config.get("online_room_id", "1001"))
             if os.environ.get("MH3U_DEBUG_DUMP") == "1":
                 env["MH3U_DUMP_AFTER"] = "10"
+
+        cheats = build_cheats_env(self.config)
+        if cheats:
+            env["MH3U_CHEATS"] = cheats
 
         # Sync mouse sensitivity before launch
         sens_float = self.config.get("mouse_sensitivity", 0.0008)

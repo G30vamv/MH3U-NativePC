@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [Unreleased]
+
+### Added
+- **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (monsters do 0 damage), more zenny and infinite items used in a quest. A warning tells you that cheats can alter or corrupt your save before you turn them on.
+- The first time you play after updating, the game is built again (the cheats need new hooks).
+
 ## [0.9.11] - 2026-11-03
 
 ### Fixed
