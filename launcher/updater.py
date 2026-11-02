@@ -29,6 +29,7 @@ PROTECTED = {
     "game.dll.rev",
     "server.log",
     "mh3u_latest.log",
+    "mh3u_anterior.log",
 }
 PROTECTED_DIRS = {"toolchain", UPDATE_DIR, BACKUP_DIR, "mh3u_dump"}
 ALLOWED_EXT = {".exe", ".dll", ".py", ".bat", ".txt", ".png", ".jpg", ".ico", ".json", ".md"}

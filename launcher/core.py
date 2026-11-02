@@ -34,7 +34,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.7"
+APP_VERSION = "v0.9.8"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -108,6 +108,15 @@ def dll_rev_path(out_dir):
     return os.path.join(out_dir, "game.dll.rev")
 
 
+def rotate_log(path, keep_name="mh3u_anterior.log"):
+    """The log of the previous launch is kept next to the new one (a short launch must not wipe a long session's log)."""
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            os.replace(path, os.path.join(os.path.dirname(path), keep_name))
+    except OSError:
+        pass
+
+
 def game_dll_is_current(out_dir):
     try:
         with open(dll_rev_path(out_dir), "r", encoding="utf-8") as f:
@@ -135,7 +144,7 @@ def detect_route_ip(target):
         return ""
 
 
-def get_local_ip_addresses():
+def get_local_ip_addresses(timeout=1.5):
     """
     Returns categorized and prioritized IPv4 addresses with friendly labels:
     1. VPNs (Radmin VPN, Tailscale, ZeroTier) -> listed FIRST.
@@ -154,7 +163,7 @@ def get_local_ip_addresses():
             "Get-NetIPAddress -AddressFamily IPv4 | Select-Object IPAddress, InterfaceAlias | ConvertTo-Json",
         ]
         out = subprocess.check_output(
-            cmd, text=True, timeout=1.5, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+            cmd, text=True, timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
         )
         items = json.loads(out)
         if isinstance(items, dict):
@@ -177,10 +186,10 @@ def get_local_ip_addresses():
                 label = f"{ip} (ZeroTier)"
                 priority = 1
             elif "wi-fi" in alias_lower or "wifi" in alias_lower or "inalamb" in alias_lower:
-                label = f"{ip} (Wi-Fi Local)"
+                label = f"{ip} (Wi-Fi, solo misma red local)"
                 priority = 2
             elif "ethernet" in alias_lower or "local area" in alias_lower:
-                label = f"{ip} (Ethernet Local)"
+                label = f"{ip} (Ethernet, solo misma red local)"
                 priority = 2
             else:
                 label = f"{ip} ({alias})"
@@ -202,9 +211,9 @@ def get_local_ip_addresses():
                 elif ip.startswith("10.147."):
                     results.append((1, f"{ip} (ZeroTier)", ip))
                 elif ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
-                    results.append((2, f"{ip} (Red Local LAN)", ip))
+                    results.append((2, f"{ip} (Red local, solo misma red)", ip))
                 else:
-                    results.append((3, f"{ip} (Red Local)", ip))
+                    results.append((3, f"{ip} (Red local, solo misma red)", ip))
         except Exception:
             pass
 
@@ -842,6 +851,46 @@ class LauncherLogic:
             if os.path.isfile(path):
                 return path
         return None
+
+    _own_address_ok = set()
+
+    def _own_address_when_joining(self):
+        """The typed address if, in «join» mode with online on, it points to this very PC (a server of one's own would start); else ''."""
+        if not self.config.get("online_enabled", False) or self.config.get("online_mode", "client") == "host":
+            return ""
+        target = self.config.get("online_server", "127.0.0.1").strip()
+        if target in ("127.0.0.1", "localhost"):
+            return target
+        try:
+            return target if target in [x.split()[0] for x in get_local_ip_addresses()] else ""
+        except Exception:
+            return ""
+
+    def refresh_local_ips(self):
+        """Radmin/Tailscale/ZeroTier may connect after the launcher opened: look again without freezing the window."""
+        if getattr(self, "_ips_refreshing", False) or not hasattr(self, "opt_local_ips"):
+            return
+        self._ips_refreshing = True
+
+        def worker():
+            try:
+                ips = get_local_ip_addresses(timeout=6)
+            except Exception:
+                ips = []
+            finally:
+                self._ips_refreshing = False
+            if ips:
+                self.ui_queue.put(("call", (0, lambda: self._apply_local_ips(ips))))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_local_ips(self, ips):
+        try:
+            keep = self.opt_local_ips.get().split()[0]
+        except Exception:
+            keep = ""
+        self.opt_local_ips.set_values(ips)
+        self.opt_local_ips.set(next((x for x in ips if x.split()[0] == keep), ips[0]))
 
     def _host_public_ip(self):
         """IP shown in 'Tu IP para amigos' (Radmin/LAN); '' if only loopback."""
@@ -1714,6 +1763,17 @@ class LauncherLogic:
                 ):
                     return
 
+        own = self._own_address_when_joining()
+        if own and own not in self._own_address_ok:
+            if not messagebox.askyesno(
+                "Esa es tu propia dirección",
+                f"En «Unirme a la sala de un amigo» escribiste {own}, que es de este mismo PC. Así NO entrarás a la sala "
+                "de tu amigo: se creará TU sala y él tendría que unirse a ti.\n\n"
+                "Si quieres unirte, pulsa «No» y escribe la IP de tu amigo (la de Radmin VPN). ¿Crear tu propia sala?",
+            ):
+                return
+            self._own_address_ok.add(own)
+
         self._offer_hidhide_access()
 
         # Prepare arguments
@@ -1899,6 +1959,7 @@ class LauncherLogic:
             if sys.platform == "win32":
                 creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
+            rotate_log(log_file_path)
             with open(log_file_path, "w", encoding="utf-8", errors="replace") as log_f:
                 p = subprocess.Popen(
                     run_args,

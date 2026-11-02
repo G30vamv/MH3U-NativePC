@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.8] - 2026-11-02
+
+### Changed
+- **"Your IP for friends" refreshes itself.** If Radmin VPN, Tailscale or ZeroTier connects after the launcher is open, its address now shows up when you open the Online tab or press the new refresh button. Home-network addresses are labelled as working only on the same network.
+- **Joining your own address.** If you choose "Join a friend's room" but the address is your own PC, the launcher now warns you that it would create your own room instead of joining.
+- The log of the previous game session is kept as `mh3u_anterior.log`, so a short session no longer wipes the log of a long one.
+
 ## [0.9.7] - 2026-11-02
 
 ### Fixed

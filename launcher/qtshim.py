@@ -357,6 +357,10 @@ class OptionMenu(QComboBox):
     def get(self):
         return self.currentText()
 
+    def set_values(self, values):
+        self.clear()
+        self.addItems(values)
+
     def set(self, text):
         i = self.findText(text)
         if i >= 0:

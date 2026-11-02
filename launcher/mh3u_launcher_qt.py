@@ -311,6 +311,8 @@ class MH3ULauncherApp(LauncherLogic):
         self.tabview.add(TAB_CONTROLS, self.setup_tab_controls())
         self.tabview.add(TAB_ONLINE, self.setup_tab_online())
         self.tabview.add(TAB_TOOLS, self.setup_tab_tools())
+        # Radmin/Tailscale/ZeroTier may have connected after the launcher opened
+        self.tabview.changed.connect(lambda key: key == TAB_ONLINE.strip() and self.refresh_local_ips())
 
         content_lay.addWidget(self.create_footer())
 
@@ -859,6 +861,7 @@ class MH3ULauncherApp(LauncherLogic):
         if ips:
             self.opt_local_ips.set(ips[0])
         ip_row.addWidget(self.opt_local_ips)
+        ip_row.addWidget(Button("🔄", "default", self.refresh_local_ips, width=44))
         ip_row.addWidget(Button("📋 Copiar IP", "default", self.copy_selected_ip, width=110))
         self.lbl_copy_feedback = Label("", "#7fcfa6", 9.5)
         ip_row.addWidget(self.lbl_copy_feedback)
