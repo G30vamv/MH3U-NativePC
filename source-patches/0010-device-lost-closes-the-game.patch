@@ -1,0 +1,147 @@
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index fb193cc..7731f80 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -11,6 +11,7 @@ mod geometry;
+ mod gx2;
+ pub mod icon;
+ pub mod kbm;
++mod lost;
+ pub mod overlay;
+ mod perf;
+ mod pipelines;
+@@ -116,8 +117,9 @@ impl Display {
+                 eprintln!("[gfx] {e} (graphics error #{n})");
+             }
+         }));
+-        // a lost device (the driver reset the GPU, ...) leaves every resource invalid: this tells why
+-        device.set_device_lost_callback(|reason, message| eprintln!("[gfx] DEVICE LOST ({reason:?}): {message}"));
++        // a lost device (the driver reset the GPU, ...) leaves every resource invalid: this tells why and closes the game
++        let _ = lost::ADAPTER.set(format!("{} ({:?})", info.name, info.backend));
++        device.set_device_lost_callback(|reason, message| lost::on_lost(reason, &message));
+         draw::SMALL_GPU.store(info.device_type == wgpu::DeviceType::IntegratedGpu, std::sync::atomic::Ordering::Relaxed);
+         let threaded = queue::thread_wanted(std::env::var("MH3U_GFX_THREAD").ok().as_deref(), info.vendor);
+         if !threaded {
+diff --git a/crates/mh3u-gfx/src/lost.rs b/crates/mh3u-gfx/src/lost.rs
+new file mode 100644
+index 0000000..0497d56
+--- /dev/null
++++ b/crates/mh3u-gfx/src/lost.rs
+@@ -0,0 +1,75 @@
++//! A graphics device the driver took away (a GPU reset, a driver crash): the game would go on with a frozen picture, sound and network
++//! alive and every buffer invalid. This tells the player what happened and closes the game instead.
++
++use crate::settings::Lang;
++use std::sync::OnceLock;
++use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
++
++/// The adapter's name and backend, for the log line that says where the device was lost.
++pub(crate) static ADAPTER: OnceLock<String> = OnceLock::new();
++
++/// Only the driver or the GPU taking the device away closes the game; `Destroyed` is our own device going away at exit.
++fn is_a_loss(reason: wgpu::DeviceLostReason) -> bool {
++    !matches!(reason, wgpu::DeviceLostReason::Destroyed)
++}
++
++/// `MH3U_DEVICE_LOST_EXIT=off` keeps the old behaviour (log the loss and carry on).
++fn closes_the_game() -> bool {
++    !std::env::var("MH3U_DEVICE_LOST_EXIT").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off"))
++}
++
++/// The title and the text of the message the player sees.
++fn message(lang: Lang) -> (&'static str, &'static str) {
++    (
++        lang.p("MH3U Port: graphics card stopped", "MH3U Port: la tarjeta gráfica se detuvo"),
++        lang.p(
++            "The graphics card stopped answering (usually a driver crash), so the picture can no longer be drawn. The game will close now; anything not saved is lost.\n\nTry this in the launcher: pick DirectX 12 as the graphics API, or lower the internal resolution to 1x. If it keeps happening, update the graphics driver (or go back to an older one).\n\nThe details are in mh3u_latest.log.",
++            "La tarjeta gráfica dejó de responder (suele ser un fallo del driver), así que ya no se puede dibujar la imagen. El juego se cerrará ahora; lo que no hayas guardado se pierde.\n\nPrueba esto en el launcher: elige DirectX 12 como API gráfica o baja la resolución interna a 1x. Si sigue pasando, actualiza el driver de la tarjeta (o vuelve a uno anterior).\n\nEl detalle está en mh3u_latest.log.",
++        ),
++    )
++}
++
++/// The device-lost callback: log where it happened, tell the player and close the game.
++pub(crate) fn on_lost(reason: wgpu::DeviceLostReason, text: &str) {
++    eprintln!("[gfx] DEVICE LOST ({reason:?}): {text}");
++    static ONCE: AtomicBool = AtomicBool::new(false);
++    if !is_a_loss(reason) || ONCE.swap(true, Relaxed) {
++        return;
++    }
++    eprintln!(
++        "[gfx] the device was lost on {} in scene {:?} at frame {}",
++        ADAPTER.get().map_or("an unknown adapter", String::as_str),
++        mh3u_rt::scene::scene(),
++        mh3u_rt::FRAMES.load(Relaxed)
++    );
++    if !closes_the_game() {
++        eprintln!("[gfx] MH3U_DEVICE_LOST_EXIT=off: the game goes on without a picture");
++        return;
++    }
++    eprintln!("[gfx] closing the game");
++    let (title, body) = message(Lang::parse(std::env::var("MH3U_UI_LANG").ok().as_deref()));
++    mh3u_rt::error_box(title, body);
++    std::process::exit(1);
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn a_driver_loss_closes_the_game_and_our_own_teardown_does_not() {
++        assert!(is_a_loss(wgpu::DeviceLostReason::Unknown));
++        assert!(!is_a_loss(wgpu::DeviceLostReason::Destroyed));
++    }
++
++    #[test]
++    fn the_message_comes_in_both_languages_and_names_the_way_out() {
++        let (en_title, en) = message(Lang::En);
++        let (es_title, es) = message(Lang::Es);
++        assert_ne!(en_title, es_title);
++        assert_ne!(en, es);
++        for text in [en, es] {
++            assert!(text.contains("DirectX 12") && text.contains("1x") && text.contains("mh3u_latest.log"));
++        }
++    }
++}
+diff --git a/crates/mh3u-rt/Cargo.toml b/crates/mh3u-rt/Cargo.toml
+index ac89167..423a2b4 100644
+--- a/crates/mh3u-rt/Cargo.toml
++++ b/crates/mh3u-rt/Cargo.toml
+@@ -23,4 +23,4 @@ memmap2 = "0.9"
+ 
+ # the guest's memory is reserved and committed on first touch (see src/memory.rs)
+ [target.'cfg(windows)'.dependencies]
+-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Memory", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO"] }
++windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Memory", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_UI_WindowsAndMessaging"] }
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index 74fe57a..28c9ae0 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -80,6 +80,27 @@ pub trait Gx2Backend: Send {
+ /// Frames shown so far: the graphics backend counts its swaps here, so the timing reports (MH3U_GFX_TIMES) can give per-frame averages.
+ pub static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+ 
++/// A message box with an error icon, over every window (the game is full screen); it returns when the player closes it. Windows only.
++#[cfg(windows)]
++pub fn error_box(title: &str, text: &str) {
++    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW};
++    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
++    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; no owner window.
++    unsafe {
++        MessageBoxW(
++            std::ptr::null_mut(),
++            wide(text).as_ptr(),
++            wide(title).as_ptr(),
++            MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND,
++        );
++    }
++}
++
++#[cfg(not(windows))]
++pub fn error_box(title: &str, text: &str) {
++    eprintln!("{title}: {text}");
++}
++
+ /// MH3U_TIMES_WINDOW: how many seconds each timing report covers (10 when it is not set or not a number).
+ pub fn times_window() -> std::time::Duration {
+     static WINDOW: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();

@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.10] - 2026-11-03
+
+### Fixed
+- **A clear message instead of a frozen picture.** If the graphics card stops answering (a driver crash or a reset of the card), the game now tells you what happened, suggests DirectX 12 or a lower resolution, and closes, instead of staying on a frozen picture with the sound still playing. This was meant to come with 0.9.9 and I forgot to put it in.
+
 ## [0.9.9] - 2026-11-03
 
 ### Fixed
