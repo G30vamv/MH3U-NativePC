@@ -3,7 +3,7 @@
 `mh3u-tools.exe` in the Releases is built from [glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port) (AGPL-3.0) plus the changes in these patches. The patches are under **AGPL-3.0**, like the original project.
 
 - **Base:** commit `41d3a9b` of `glinesbdev/mh3u-port` (26 Oct 2026, *Merge pull request #34*).
-- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006` and `0008` after `0007`.
+- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007` and `0009` after `0008`.
 
 | Patch | Contents |
 |---|---|
@@ -15,6 +15,7 @@
 | `0006-gpu-error-reporting.patch` | Says in the log why the graphics device was lost and no longer floods it with repeated graphics errors (`lib.rs`). |
 | `0007-fix-character-colours.patch` | Fixes the colours of characters (a cold blue-green tint): in a group of dot products the output modifier (times 2, times 4, divided by 2) and clamp of the instructions after the first were skipped, and pixel shaders that ask for the fragment position now receive it (the fog depth of characters) (`translate.rs`, with tests; `draw.rs`). Also renews the on-disk shader translation cache. |
 | `0008-fix-stale-colour-buffers.patch` | Fixes textures drawn with the picture of an old render target: the game's colour buffers (such as the screenshot kept at a monster's last hit for the results screen) were remembered by memory address for ever and were drawn over any texture the game later put in that memory. A buffer is now only used when the texture read there has the buffer's size (`draw.rs`, `gx2.rs`, with a test); the log says once when one is skipped. |
+| `0009-gpu-queue-thread-by-vendor.patch` | The GPU queue's own thread (from `0001`) is now on by default only on NVIDIA cards: on AMD cards it made the driver hold on to gigabytes of memory in screens with many draws (the item box) until the device was lost, and cards that share the system's memory (Intel's) are kept on the game's thread too. `MH3U_GFX_THREAD=on` or `off` decides for any card (`queue.rs`, `lib.rs`). |
 
 ## Reproducing the binary
 
@@ -30,7 +31,8 @@ git apply --ignore-whitespace <path>/0005-low-memory-gpus-and-gpu-report.patch
 git apply --ignore-whitespace <path>/0006-gpu-error-reporting.patch
 git apply --ignore-whitespace <path>/0007-fix-character-colours.patch
 git apply --ignore-whitespace <path>/0008-fix-stale-colour-buffers.patch
+git apply --ignore-whitespace <path>/0009-gpu-queue-thread-by-vendor.patch
 cargo build --release -p mh3u-tools
 ```
 
-Verified: the eight patches apply cleanly on `41d3a9b`, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.
+Verified: the nine patches apply cleanly on `41d3a9b`, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.

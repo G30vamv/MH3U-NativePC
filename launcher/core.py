@@ -34,7 +34,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.8"
+APP_VERSION = "v0.9.9"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -106,6 +106,20 @@ def read_ingame_settings(path):
 
 def dll_rev_path(out_dir):
     return os.path.join(out_dir, "game.dll.rev")
+
+
+def gpu_thread_mode(config):
+    """The GPU queue's thread setting: "auto" (the engine decides by the card), "on" or "off" (an old config kept true or false)."""
+    value = config.get("gpu_thread", "auto")
+    if value in ("on", "off", "auto"):
+        return value
+    return "off" if value is False else "auto"
+
+
+def gpu_thread_env(config):
+    """The variable that sets the GPU queue's own thread (Graphics); nothing in automatic, where the engine picks by the card."""
+    mode = gpu_thread_mode(config)
+    return {} if mode == "auto" else {"MH3U_GFX_THREAD": mode}
 
 
 def rotate_log(path, keep_name="mh3u_anterior.log"):
@@ -453,6 +467,7 @@ class LauncherLogic:
             "upscaler": "fsr",
             "fsr_sharpness": 75,
             "build_lto": False,
+            "gpu_thread": "auto",
             "ui_language": "auto",
             "right_stick_sens": 100,
         }
@@ -674,6 +689,10 @@ class LauncherLogic:
 
     def on_keyboard_changed(self, value):
         self.config["keyboard_controls"] = value == "Teclado"  # Teclado = keyboard + mouse capture on
+        self.save_config()
+
+    def on_gpu_thread_changed(self, value):
+        self.config["gpu_thread"] = "on" if "Siempre" in value else "off" if "Apagada" in value else "auto"
         self.save_config()
 
     def on_backend_changed(self, value):
@@ -1832,6 +1851,9 @@ class LauncherLogic:
 
         # Present Mode (VSync / Mailbox)
         env["MH3U_PRESENT_MODE"] = self.config.get("present_mode", "mailbox")
+
+        # GPU queue on its own thread (faster, but it froze the picture on an AMD card): off hands the work back to the game's thread
+        env.update(gpu_thread_env(self.config))
 
         # Upscaler & Sharpness (AMD FidelityFX FSR 1.0 / CAS)
         env["MH3U_UPSCALER"] = self.config.get("upscaler", "fsr")

@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.9] - 2026-11-03
+
+### Fixed
+- **The picture no longer freezes on AMD graphics cards.** On AMD cards the game could freeze (sound and network kept going) a few seconds after opening the item box or the equipment screen in your house. The game now splits its graphics work between two threads only on NVIDIA cards, where it makes the game faster. On AMD and Intel it keeps everything on one thread, so it is a little slower on a weak processor but no longer runs out of memory.
+
+### Added
+- **A setting for it.** Graphics now has "GPU queue on its own thread": *Automatic* (recommended, the choice above), *Always on* and *Off*. Hover over it for a short explanation.
+
 ## [0.9.8] - 2026-11-02
 
 ### Changed

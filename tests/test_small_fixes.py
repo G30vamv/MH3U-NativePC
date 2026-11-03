@@ -75,3 +75,18 @@ class IpLabelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GpuThreadSettingTests(unittest.TestCase):
+    def test_automatic_leaves_the_choice_to_the_engine(self):
+        self.assertEqual(core.gpu_thread_env({}), {})
+        self.assertEqual(core.gpu_thread_env({"gpu_thread": "auto"}), {})
+
+    def test_on_and_off_are_passed_to_the_engine(self):
+        self.assertEqual(core.gpu_thread_env({"gpu_thread": "on"}), {"MH3U_GFX_THREAD": "on"})
+        self.assertEqual(core.gpu_thread_env({"gpu_thread": "off"}), {"MH3U_GFX_THREAD": "off"})
+
+    def test_a_config_from_the_first_switch_keeps_its_meaning(self):
+        self.assertEqual(core.gpu_thread_mode({"gpu_thread": True}), "auto")
+        self.assertEqual(core.gpu_thread_mode({"gpu_thread": False}), "off")
+        self.assertEqual(core.gpu_thread_env({"gpu_thread": False}), {"MH3U_GFX_THREAD": "off"})
