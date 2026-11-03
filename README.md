@@ -40,6 +40,18 @@ Every Release publishes a `manifest.json` with the version, the notes and the li
 
 It never touches `launcher_config.json`, `game.dll`, `toolchain/` or the logs. If a Release changes the translator output, the launcher asks to rebuild `game.dll` automatically.
 
+## Versions and releases
+
+**Version numbers.** Versions look like `v0.9.10`. They use the `MAJOR.MINOR.PATCH` shape of [Semantic Versioning](https://semver.org/), but while the project is below 1.0 every release raises the last number, whether it brings fixes or new things; the notes of each release say which. Below 1.0 anything may change from one version to the next.
+
+**One release, two files.** Each [Release](../../releases) shows only `MH3U_Port_Launcher_<version>.zip` (everything needed to run) and `manifest.json` (what the launcher reads to update itself). Older releases keep only their zip. The one marked *Latest* is the current version.
+
+**Published versions are never replaced.** If something is wrong, a new version comes out. People who already have the old one would not receive a silent change.
+
+**Where the update files live.** The `updates` branch holds the individual files of every version, with a tag `files-<version>`, so the launcher can download only what changed, pinned to an exact commit. It is not meant to be edited by hand; `main` has everything else.
+
+**Before a release.** The Python tests, a run of the game, and a check that the previous version updates to the new one with the real manifest. The steps for maintainers are in [`docs/RELEASING.md`](docs/RELEASING.md); the history is in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Building from source
 
 ```powershell

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/) while it is below 1.0 (minor versions may add features and change behavior).
+All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). While the project is below 1.0, every release raises the last number of the version (`0.MINOR.PATCH`), whether it brings fixes or new things; see "Versions and releases" in the [README](README.md). A published version is never replaced: a fix comes as a new version.
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
