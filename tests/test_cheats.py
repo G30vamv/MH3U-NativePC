@@ -44,5 +44,66 @@ class CheatsEnvTests(unittest.TestCase):
             self.assertIn(hook, names)
 
 
+class StaleBuildTests(unittest.TestCase):
+    """A hooks list that changed (new cheats) must make the C code again, or the new hooks never get into game.dll."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = os.path.join(self.tmp.name, "out")
+        os.makedirs(self.out)
+        self.hooks = os.path.join(self.tmp.name, "hooks.txt")
+        self._saved = core.hooks_list_path
+        core.hooks_list_path = lambda: self.hooks
+
+    def tearDown(self):
+        core.hooks_list_path = self._saved
+        self.tmp.cleanup()
+
+    def write(self, name, text):
+        with open(os.path.join(self.out, name) if name != "hooks" else self.hooks, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def built(self):
+        """An output folder as a finished build leaves it."""
+        self.write("hooks", "0x02129ef4 hit_resolve  # a comment\n")
+        self.write("game.h", "")
+        self.write("game.dll.rev", core.TRANSLATOR_REV)
+        self.write("game.dll.hooks", core.hooks_fingerprint(self.hooks))
+
+    def test_the_fingerprint_ignores_comments_blank_lines_and_spacing_but_not_entries(self):
+        self.write("hooks", "0x1000 a\n0x2000   b # x\n")
+        base = core.hooks_fingerprint(self.hooks)
+        self.write("hooks", "# top\n\n0x1000 a   \n  0x2000 b\n")
+        self.assertEqual(core.hooks_fingerprint(self.hooks), base)
+        self.write("hooks", "0x1000 a\n0x2000 b\n0x3000 c\n")
+        self.assertNotEqual(core.hooks_fingerprint(self.hooks), base)
+
+    def test_a_finished_build_is_current_and_is_not_translated_again(self):
+        self.built()
+        self.assertTrue(core.game_dll_is_current(self.out))
+        self.assertFalse(core.needs_translation(self.out))
+
+    def test_a_new_hook_makes_the_build_stale_and_the_code_is_made_again(self):
+        self.built()
+        self.write("hooks", "0x02129ef4 hit_resolve\n0x0285f530 sharp_change\n")
+        self.assertFalse(core.game_dll_is_current(self.out))
+        self.assertTrue(core.needs_translation(self.out))
+
+    def test_an_older_translator_is_stale_and_is_translated_again(self):
+        self.built()
+        self.write("game.dll.rev", "1")
+        self.assertTrue(core.needs_translation(self.out))
+
+    def test_a_build_from_before_the_stamp_is_current_while_the_translator_revision_matches(self):
+        self.built()
+        os.remove(os.path.join(self.out, "game.dll.hooks"))
+        self.assertTrue(core.game_dll_is_current(self.out))
+
+    def test_nothing_made_yet_is_translated(self):
+        self.assertTrue(core.needs_translation(self.out))
+
+
 if __name__ == "__main__":
     unittest.main()

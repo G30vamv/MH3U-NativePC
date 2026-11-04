@@ -6,6 +6,7 @@ The window is in mh3u_launcher_qt.py; it gives this class the widgets it works w
 import os
 import sys
 import json
+import hashlib
 import shutil
 import threading
 import subprocess
@@ -43,7 +44,7 @@ UPDATE_BTN_READY = ("#b8791e", "#d4922a")
 
 # Bump when the translator output changes (e.g. more functions discovered). A game.dll built
 # by an older translator lacks functions the online code needs ("not a translated function").
-TRANSLATOR_REV = "3"  # 3: the cheats' hooks (hit_resolve, sharp_change) are in mods/hooks.txt
+TRANSLATOR_REV = "4"  # 4: the cheats' hooks (hit_resolve, sharp_change) are in mods/hooks.txt, and a stale build is translated again
 
 # The launcher's Cheats section. The engine reads the ones that are on from MH3U_CHEATS (mh3u-rt/src/cheats.rs). To add a cheat: a row
 # here, its callback in cheats.rs and its hook in package/mods/hooks.txt. "value" is for a cheat with a multiplier.
@@ -156,6 +157,33 @@ def dll_rev_path(out_dir):
     return os.path.join(out_dir, "game.dll.rev")
 
 
+def dll_hooks_path(out_dir):
+    return os.path.join(out_dir, "game.dll.hooks")
+
+
+def hooks_list_path():
+    """The hooks list the translator is given: mods/hooks.txt next to the launcher, or the workspace's; "" when there is none."""
+    base = get_base_dir()
+    for h in (os.path.join(base, "mods", "hooks.txt"), os.path.join(base, "..", "mh3u-port", "mods", "hooks.txt")):
+        if os.path.exists(h):
+            return os.path.abspath(h)
+    return ""
+
+
+def hooks_fingerprint(path):
+    """What a build depends on in a hooks list: its entries (address and name, in order), without comments or blank lines."""
+    entries = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    entries.append(" ".join(line.split()))
+    except OSError:
+        pass
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()[:16]
+
+
 def gpu_thread_mode(config):
     """The GPU queue's thread setting: "auto" (the engine decides by the card), "on" or "off" (an old config kept true or false)."""
     value = config.get("gpu_thread", "auto")
@@ -180,11 +208,25 @@ def rotate_log(path, keep_name="mh3u_anterior.log"):
 
 
 def game_dll_is_current(out_dir):
+    """Whether game.dll was built by this translator (TRANSLATOR_REV) from the hooks list the launcher has now."""
     try:
         with open(dll_rev_path(out_dir), "r", encoding="utf-8") as f:
-            return f.read().strip() == TRANSLATOR_REV
+            if f.read().strip() != TRANSLATOR_REV:
+                return False
     except OSError:
         return False
+    try:
+        with open(dll_hooks_path(out_dir), "r", encoding="utf-8") as f:
+            built_with = f.read().strip()
+    except OSError:
+        return True  # a build from before the hooks list was stamped: only TRANSLATOR_REV tells
+    return built_with == hooks_fingerprint(hooks_list_path())
+
+
+def needs_translation(out_dir):
+    """Whether the C code must be made again before building: it was never made, or the build is stale (a newer translator, or
+    a different hooks list). Building the old C again would leave the new hooks (the cheats') out of game.dll."""
+    return not os.path.exists(os.path.join(out_dir, "game.h")) or not game_dll_is_current(out_dir)
 CONFIG_FILE = "launcher_config.json"
 DEFAULT_OUT_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "mh3u", "c")
 
@@ -1682,9 +1724,8 @@ class LauncherLogic:
                 self.ui_queue.put(("progress", 0))
                 return
 
-            # 1. Translate step if needed
-            game_h = os.path.join(out_dir, "game.h")
-            if not os.path.exists(game_h):
+            # 1. Translate step if needed (also when the build is stale: a new translator or a different hooks list)
+            if needs_translation(out_dir):
                 self._log("> PASO 1/2: Traduciendo ejecutable PowerPC (Wii U) a código C...")
                 self.ui_queue.put(("progress", 0.15))
                 cmd = [tools, "translate", games_dir, out_dir]
@@ -1713,6 +1754,8 @@ class LauncherLogic:
                 try:
                     with open(dll_rev_path(out_dir), "w", encoding="utf-8") as f:
                         f.write(TRANSLATOR_REV)
+                    with open(dll_hooks_path(out_dir), "w", encoding="utf-8") as f:
+                        f.write(hooks_fingerprint(hooks_list_path()))
                 except OSError:
                     pass
                 self.ui_queue.put(("progress", 1.0))
