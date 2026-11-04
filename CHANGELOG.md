@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [Unreleased]
+
+### Changed
+- **One setting for the graphics threads.** "GPU queue on its own thread" in Graphics is now **"Graphics in parallel (more FPS)"** with two choices: *Automatic* (recommended) and *Off*. It covers both threads the game uses for graphics. Automatic turns them on by itself only on NVIDIA cards; *Off* is for anyone who sees flickering or freezes. If you had the old setting on "Always on" the game keeps using it, but the window no longer offers it.
+
 ## [0.9.11] - 2026-11-03
 
 ### Fixed
