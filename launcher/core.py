@@ -84,6 +84,46 @@ def cheat_value(config, cheat):
     return max(spec["min"], min(spec["max"], v))
 
 
+# The hooks (names in mods/hooks.txt) each cheat needs in the build; cheats.rs has the same table.
+CHEAT_HOOKS = {
+    "onehit": ("hit_resolve",),
+    "sharp": ("sharp_change",),
+    "god": ("hit_resolve",),
+    "money": ("money_add",),
+    "items": ("item_to_pouch",),
+}
+
+
+def build_hook_names(out_dir):
+    """The names of the hooks a build was translated with (the hooks.txt the translator wrote in its output folder)."""
+    names = set()
+    try:
+        with open(os.path.join(out_dir, "hooks.txt"), "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.split("#", 1)[0].split()
+                if line:
+                    names.add(line[-1])
+    except OSError:
+        pass
+    return names
+
+
+def missing_cheat_hooks(config, out_dir):
+    """The hooks the cheats that are on need and the build lacks (sorted); empty when the cheats are off or nothing is missing."""
+    on = {c["id"] for c in CHEATS if config.get("cheats_enabled", False) and config.get(f"cheat_{c['id']}", False)}
+    needed = {h for cheat in on for h in CHEAT_HOOKS.get(cheat, ())}
+    return sorted(needed - build_hook_names(out_dir))
+
+
+def mark_build_stale(out_dir):
+    """Makes the launcher see the build as out of date, so the next build makes the code again."""
+    try:
+        with open(dll_hooks_path(out_dir), "w", encoding="utf-8") as f:
+            f.write("stale")
+    except OSError:
+        pass
+
+
 def build_cheats_env(config):
     """The value of MH3U_CHEATS ("onehit=1000,sharp"): the cheats that are on, if the section is on; "" when none."""
     if not config.get("cheats_enabled", False):
@@ -1724,6 +1764,8 @@ class LauncherLogic:
                 self.ui_queue.put(("progress", 0))
                 return
 
+            if not hooks_list_path():
+                self._log("⚠ No hay mods/hooks.txt junto al launcher: el juego se traduce SIN ganchos (los trucos, el menú de mods y los eventos del panel F1 no funcionarán).")
             # 1. Translate step if needed (also when the build is stale: a new translator or a different hooks list)
             if needs_translation(out_dir):
                 self._log("> PASO 1/2: Traduciendo ejecutable PowerPC (Wii U) a código C...")
@@ -1881,6 +1923,27 @@ class LauncherLogic:
             ):
                 self.start_build_process()
             return
+
+        # the cheats work through hooks that are in the build only if it was translated with them
+        missing = missing_cheat_hooks(self.config, out_dir)
+        if missing:
+            if hooks_list_path():
+                if messagebox.askyesno(
+                    "Trucos: recompilación necesaria",
+                    "Los trucos que activaste necesitan partes que tu game.dll no tiene "
+                    f"({', '.join(missing)}), así que no harían nada.\n\n¿Recompilar ahora? (tarda varios minutos)\n"
+                    "Si pulsas «No», el juego se abre igual pero sin esos trucos.",
+                ):
+                    mark_build_stale(out_dir)
+                    self.start_build_process()
+                    return
+            else:
+                messagebox.showwarning(
+                    "Trucos sin efecto",
+                    "Esta carpeta del launcher no tiene mods/hooks.txt, así que el juego se compiló sin ganchos y los trucos "
+                    f"no pueden funcionar (faltan: {', '.join(missing)}).\n\nUsa el launcher de la carpeta que trae la carpeta "
+                    "«mods» con hooks.txt y compila el juego allí.",
+                )
 
         # what is typed in the Online tab counts without pressing Guardar; with online on, the firewall is looked at once per session
         if hasattr(self, "switch_online"):

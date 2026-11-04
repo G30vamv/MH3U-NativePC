@@ -1,9 +1,9 @@
 diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
 new file mode 100644
-index 0000000..805a732
+index 0000000..253f96a
 --- /dev/null
 +++ b/crates/mh3u-rt/src/cheats.rs
-@@ -0,0 +1,481 @@
+@@ -0,0 +1,490 @@
 +//! Cheats, opt-in: `MH3U_CHEATS=onehit=1000,sharp,god,money=10,items` (the launcher writes it from its Cheats section). Each cheat
 +//! is one row of `CHEATS`: its id, the hooks it needs (names of `mods/hooks.txt`) and how to make the callback of each. To add a
 +//! cheat: write its callback maker, add the row, add the hook to `mods/hooks.txt` and a row to the launcher's `CHEATS` list.
@@ -130,6 +130,15 @@ index 0000000..805a732
 +        }
 +    }
 +    on
++}
++
++/// Said when the game has no hooks at all (it was translated without a hooks list): the cheats cannot work then.
++pub fn no_hooks_warning() {
++    if std::env::var("MH3U_CHEATS").is_ok_and(|v| !v.trim().is_empty()) {
++        eprintln!(
++            "[cheats] cheats are on but this build of the game has no hooks, so none can work: build the game again with a launcher that has mods/hooks.txt"
++        );
++    }
 +}
 +
 +/// The class of whoever a hit is from: the attacker's, or, for an object, its maker's.
@@ -498,7 +507,7 @@ index 27ca167..5dec988 100644
  mod kernel;
  mod memory;
 diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
-index 704663f..d92a22e 100644
+index 704663f..5ec1c9d 100644
 --- a/crates/mh3u-tools/src/main.rs
 +++ b/crates/mh3u-tools/src/main.rs
 @@ -928,6 +928,8 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
@@ -510,3 +519,12 @@ index 704663f..d92a22e 100644
          // opt-in, read-only: the start menu's state on each change (MH3U_MENU_PROBE=1; docs/native-menu.md)
          mh3u_rt::menu_probe::register(&mut registry);
          // opt-in: while the mod key is held, the start menu's Gestures row is a Mods entry (MH3U_NATIVE_MENU=1; docs/native-menu.md)
+@@ -939,6 +941,8 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
+         mh3u_rt::hooks::install(registry);
+     } else {
+         mh3u_rt::menu_probe::no_hooks();
++        // opt-in: the launcher's Cheats section needs hooks (MH3U_CHEATS): says so when the build has none
++        mh3u_rt::cheats::no_hooks_warning();
+     }
+     let text = rpx::section_at(&data, TEXT_ADDRESS)?;
+     let mut content: Vec<PathBuf> = Vec::new();

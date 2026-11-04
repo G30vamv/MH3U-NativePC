@@ -105,5 +105,59 @@ class StaleBuildTests(unittest.TestCase):
         self.assertTrue(core.needs_translation(self.out))
 
 
+class CheatHooksInTheBuildTests(unittest.TestCase):
+    """The cheats do nothing when the build was translated without their hooks: that is looked at when playing."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build_hooks(self, text):
+        with open(os.path.join(self.out, "hooks.txt"), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def all_on(self):
+        config = {"cheats_enabled": True}
+        config.update({f"cheat_{c['id']}": True for c in core.CHEATS})
+        return config
+
+    def test_the_hooks_of_a_build_are_read_by_name(self):
+        self.build_hooks("0x02129ef4 hit_resolve\n0x0219c720 money_add\n")
+        self.assertEqual(core.build_hook_names(self.out), {"hit_resolve", "money_add"})
+        self.assertEqual(core.build_hook_names(os.path.join(self.out, "nothing")), set())
+
+    def test_a_build_without_hooks_lacks_every_hook_the_cheats_need(self):
+        self.build_hooks("")
+        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["hit_resolve", "item_to_pouch", "money_add", "sharp_change"])
+
+    def test_only_the_hooks_of_the_cheats_that_are_on_are_needed(self):
+        self.build_hooks("0x0219c720 money_add\n")
+        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": True, "cheat_money": True}, self.out), [])
+        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": True, "cheat_sharp": True}, self.out), ["sharp_change"])
+        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": False, "cheat_sharp": True}, self.out), [])
+
+    def test_every_cheat_has_its_hooks_named_and_they_are_in_the_package_list(self):
+        self.assertEqual(set(core.CHEAT_HOOKS), {c["id"] for c in core.CHEATS})
+        here = os.path.dirname(__file__)
+        with open(os.path.join(here, "..", "package", "mods", "hooks.txt"), encoding="utf-8") as f:
+            names = {line.split("#")[0].split()[-1] for line in f if line.split("#")[0].strip()}
+        for hooks in core.CHEAT_HOOKS.values():
+            self.assertTrue(set(hooks) <= names)
+
+    def test_a_build_marked_stale_is_made_again(self):
+        for name, text in (("game.h", ""), ("game.dll.rev", core.TRANSLATOR_REV)):
+            with open(os.path.join(self.out, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        self.assertTrue(core.game_dll_is_current(self.out))
+        core.mark_build_stale(self.out)
+        self.assertFalse(core.game_dll_is_current(self.out))
+        self.assertTrue(core.needs_translation(self.out))
+
+
 if __name__ == "__main__":
     unittest.main()

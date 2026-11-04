@@ -12,6 +12,7 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 
 ### Fixed
 - **Rebuilding after an update now really starts over when it has to.** If an update changed the game's code (like the cheats do), the launcher used to build the old code again and leave the new parts out, so some new features did nothing. It now makes the code again whenever the build is out of date.
+- **Cheats that cannot work now tell you.** If a cheat needs a part your compiled game does not have, the launcher says so when you press PLAY and offers to build the game again; the game also says it in its log. The build window warns when the launcher has no hooks list.
 
 ## [0.9.11] - 2026-11-03
 
