@@ -237,9 +237,13 @@ def gpu_thread_mode(config):
 
 
 def gpu_thread_env(config):
-    """The variable that sets the GPU queue's own thread (Graphics); nothing in automatic, where the engine picks by the card."""
+    """The variables of "Graphics in parallel" (Graphics tab): nothing in automatic, where the engine picks by the card;
+    "off" turns off both the GPU queue's own thread and the thread that works out the draws; "on" (only kept from an older
+    config file, the window no longer offers it) forces the GPU queue's thread alone."""
     mode = gpu_thread_mode(config)
-    return {} if mode == "auto" else {"MH3U_GFX_THREAD": mode}
+    if mode == "off":
+        return {"MH3U_GFX_THREAD": "off", "MH3U_GFX_RESOLVER": "off"}
+    return {} if mode == "auto" else {"MH3U_GFX_THREAD": "on"}
 
 
 def rotate_log(path, keep_name="mh3u_anterior.log"):
@@ -833,7 +837,7 @@ class LauncherLogic:
         self.save_config()
 
     def on_gpu_thread_changed(self, value):
-        self.config["gpu_thread"] = "on" if "Siempre" in value else "off" if "Apagada" in value else "auto"
+        self.config["gpu_thread"] = "on" if "Siempre" in value else "off" if "Apagad" in value else "auto"
         self.save_config()
 
     def on_backend_changed(self, value):

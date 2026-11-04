@@ -562,16 +562,21 @@ class MH3ULauncherApp(LauncherLogic):
         if self.config.get("fps", False):
             self.chk_fps.select()
         g.addWidget(self.chk_fps)
-        g.addWidget(Label("Cola de la GPU en un hilo propio:", None, 10.5, bold=True))
-        self.opt_gpu_thread = Segmented(["Automático (recomendado)", "Siempre activada", "Apagada"], self.on_gpu_thread_changed)
-        self.opt_gpu_thread.set({"on": "Siempre activada", "off": "Apagada"}.get(gpu_thread_mode(self.config), "Automático (recomendado)"))
+        g.addWidget(Label("Gráficos en paralelo (más FPS):", None, 10.5, bold=True))
+        # an older config file may hold "on" (forced on): that choice is shown, but the window no longer offers it
+        parallel = gpu_thread_mode(self.config)
+        self.opt_gpu_thread = Segmented(
+            ["Automático (recomendado)", "Apagado"] + (["Siempre activado"] if parallel == "on" else []), self.on_gpu_thread_changed
+        )
+        self.opt_gpu_thread.set({"on": "Siempre activado", "off": "Apagado"}.get(parallel, "Automático (recomendado)"))
         self.opt_gpu_thread.setToolTip(
-            "Reparte el trabajo gráfico entre dos hilos y sube los FPS, sobre todo en procesadores lentos.\n"
-            "Automático: se activa solo con tarjetas NVIDIA y se apaga con AMD e Intel, donde congelaba el juego\n"
-            "(por ejemplo al abrir la caja de objetos). Si tienes una tarjeta AMD, déjalo en Automático o Apagada."
+            "Reparte el trabajo gráfico entre varios núcleos del procesador para subir los FPS, sobre todo en procesadores lentos.\n"
+            "Automático: se activa solo con tarjetas NVIDIA y se apaga con AMD e Intel, donde podía congelar la imagen\n"
+            "(por ejemplo al abrir la caja de objetos).\n"
+            "Apagado: úsalo si ves parpadeos o cosas que desaparecen, o si el juego se congela."
         )
         g.addWidget(self.opt_gpu_thread)
-        g.addWidget(_hint("💡 Automático es lo recomendado: con tarjetas AMD o Intel el hilo congelaba la imagen."))
+        g.addWidget(_hint("💡 Automático es lo recomendado. Si ves parpadeos o el juego se congela, prueba Apagado."))
 
         g.addWidget(Label("Motor Gráfico (Backend):", None, 10.5, bold=True))
         self.opt_backend = Segmented(["Vulkan (Recomendado)", "DirectX 12 (DX12)"], self.on_backend_changed)

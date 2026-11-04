@@ -7,12 +7,15 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 ## [Unreleased]
 
 ### Added
-- **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (monsters do 0 damage), more zenny and infinite items used in a quest. A warning tells you that cheats can alter or corrupt your save before you turn them on.
+- **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (the hits you take do 0 damage and add no status effects), more zenny and infinite items used in a quest. Two read-only helpers join them: **life bars for the monsters** of the quest and a **damage meter** (what the monsters' life goes down by, yours apart, and your DPS), both drawn over the game. A warning tells you that cheats can alter or corrupt your save before you turn them on.
 - The first time you play after updating, the game is built again (the cheats need new hooks).
 
 ### Fixed
 - **Rebuilding after an update now really starts over when it has to.** If an update changed the game's code (like the cheats do), the launcher used to build the old code again and leave the new parts out, so some new features did nothing. It now makes the code again whenever the build is out of date.
 - **Cheats that cannot work now tell you.** If a cheat needs a part your compiled game does not have, the launcher says so when you press PLAY and offers to build the game again; the game also says it in its log. The build window warns when the launcher has no hooks list.
+
+### Changed
+- **One setting for the graphics threads.** "GPU queue on its own thread" in Graphics is now **"Graphics in parallel (more FPS)"** with two choices: *Automatic* (recommended) and *Off*. It covers both threads the game uses for graphics. Automatic turns them on by itself only on NVIDIA cards; *Off* is for anyone who sees flickering or freezes. If you had the old setting on "Always on" the game keeps using it, but the window no longer offers it.
 
 ## [0.9.11] - 2026-11-03
 
