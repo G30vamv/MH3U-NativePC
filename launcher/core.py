@@ -44,7 +44,7 @@ UPDATE_BTN_READY = ("#b8791e", "#d4922a")
 
 # Bump when the translator output changes (e.g. more functions discovered). A game.dll built
 # by an older translator lacks functions the online code needs ("not a translated function").
-TRANSLATOR_REV = "4"  # 4: the cheats' hooks (hit_resolve, sharp_change) are in mods/hooks.txt, and a stale build is translated again
+TRANSLATOR_REV = "5"  # 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
 
 # The launcher's Cheats section. The engine reads the ones that are on from MH3U_CHEATS (mh3u-rt/src/cheats.rs). To add a cheat: a row
 # here, its callback in cheats.rs and its hook in package/mods/hooks.txt. "value" is for a cheat with a multiplier.
@@ -56,7 +56,7 @@ CHEATS = [
         "value": {"default": 1000, "min": 2, "max": 100000},
     },
     {"id": "sharp", "label": "Filo infinito", "hint": "💡 El filo del arma no baja nunca."},
-    {"id": "god", "label": "Invencible (los monstruos hacen 0 de daño)", "hint": "💡 Los golpes de los monstruos no quitan vida; pueden seguir empujándote o aturdiéndote."},
+    {"id": "god", "label": "Invencible (los golpes que recibes hacen 0 de daño)", "hint": "💡 Los golpes no quitan vida ni acumulan estados (veneno, aturdimiento...); pueden seguir empujándote. Solo vale para tu cazador."},
     {
         "id": "money",
         "label": "Más zenny (todo lo que ganes ×N)",
@@ -64,6 +64,8 @@ CHEATS = [
         "value": {"default": 10, "min": 2, "max": 1000},
     },
     {"id": "items", "label": "Objetos infinitos (los que usas en misión no se gastan)", "hint": "💡 Pociones, trampas, piedras de afilar... usados dentro de una misión."},
+    {"id": "monsterhp", "label": "Vida de los monstruos en pantalla (solo lectura)", "hint": "💡 Una barra por monstruo de la misión con su vida actual y máxima. No cambia nada del juego."},
+    {"id": "dmgmeter", "label": "Contador de daño y DPS (solo lectura)", "hint": "💡 Suma lo que baja la vida de los monstruos (aparte, lo de tus golpes) y el DPS de los últimos 5 s y medio. No cambia nada del juego."},
 ]
 
 CHEATS_WARNING = (
@@ -88,9 +90,11 @@ def cheat_value(config, cheat):
 CHEAT_HOOKS = {
     "onehit": ("hit_resolve",),
     "sharp": ("sharp_change",),
-    "god": ("hit_resolve",),
+    "god": ("hunter_hit",),
     "money": ("money_add",),
     "items": ("item_to_pouch",),
+    "monsterhp": ("monster_init",),
+    "dmgmeter": ("monster_init", "hit_resolve"),
 }
 
 

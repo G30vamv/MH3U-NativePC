@@ -133,7 +133,7 @@ class CheatHooksInTheBuildTests(unittest.TestCase):
 
     def test_a_build_without_hooks_lacks_every_hook_the_cheats_need(self):
         self.build_hooks("")
-        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["hit_resolve", "item_to_pouch", "money_add", "sharp_change"])
+        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["hit_resolve", "hunter_hit", "item_to_pouch", "money_add", "monster_init", "sharp_change"])
 
     def test_only_the_hooks_of_the_cheats_that_are_on_are_needed(self):
         self.build_hooks("0x0219c720 money_add\n")
