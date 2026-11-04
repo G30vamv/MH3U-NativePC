@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
+## [0.9.11] - 2026-11-03
+
+### Fixed
+- **Updates no longer throw away the graphics the game had saved.** Until now, after almost every update the game forgot the shaders and effects it had prepared, so the first scenes stuttered and some things were missing for a few seconds. They are now kept unless an update really changes how they are made. The first time after this update the game still rebuilds them once.
+
+### Added
+- **A bit more information in the log.** When the FPS counter is on, the log now also says how busy each part of the game is and how long the graphics card takes to finish each frame. It helps to find out why a PC is slow when you send a log.
+
 ## [0.9.10] - 2026-11-03
 
 ### Fixed

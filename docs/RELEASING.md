@@ -4,6 +4,7 @@
 
 1. Bump `APP_VERSION` in `launcher/core.py`, `launcher/version_info.txt` and the version text in `package/LEEME.txt`.
 2. If the translator output changed, bump `TRANSLATOR_REV` too (users will rebuild `game.dll`).
+   The on-disk shader and pipeline caches are named after a hash of the translator's sources (`mh3u-latte`) only, so a release that changes just the rest of the graphics code keeps everyone's caches. If you change what `mh3u-gfx` feeds the translator, or how it uses its output, bump the tag in `translation_key` (`vs2`/`ps3` in `draw.rs`), or old caches would be used.
 3. Add the new section to [`CHANGELOG.md`](../CHANGELOG.md) (English, [Keep a Changelog](https://keepachangelog.com) style).
 4. If `mh3u-port` changed, regenerate `source-patches/` (see its README) and build `mh3u-tools.exe` (`cargo build --release -p mh3u-tools`).
 5. Rebuild `MH3U.exe`: `pip install PySide6-Essentials pillow pyinstaller`, then `cd launcher && python -m PyInstaller MH3U.spec`. Put it, `mh3u-tools.exe`, `libunwind.dll`, `server.exe`, `assets/` and the files of `package/` in a distributable folder (the previous release zip with the new files replaced works).

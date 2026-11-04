@@ -3,7 +3,7 @@
 `mh3u-tools.exe` in the Releases is built from [glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port) (AGPL-3.0) plus the changes in these patches. The patches are under **AGPL-3.0**, like the original project.
 
 - **Base:** commit `41d3a9b` of `glinesbdev/mh3u-port` (26 Oct 2026, *Merge pull request #34*).
-- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007`, `0009` after `0008` and `0010` after `0009`.
+- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007`, `0009` after `0008`, `0010` after `0009` and `0011` after `0010`.
 
 | Patch | Contents |
 |---|---|
@@ -17,6 +17,7 @@
 | `0008-fix-stale-colour-buffers.patch` | Fixes textures drawn with the picture of an old render target: the game's colour buffers (such as the screenshot kept at a monster's last hit for the results screen) were remembered by memory address for ever and were drawn over any texture the game later put in that memory. A buffer is now only used when the texture read there has the buffer's size (`draw.rs`, `gx2.rs`, with a test); the log says once when one is skipped. |
 | `0009-gpu-queue-thread-by-vendor.patch` | The GPU queue's own thread (from `0001`) is now on by default only on NVIDIA cards: on AMD cards it made the driver hold on to gigabytes of memory in screens with many draws (the item box) until the device was lost, and cards that share the system's memory (Intel's) are kept on the game's thread too. `MH3U_GFX_THREAD=on` or `off` decides for any card (`queue.rs`, `lib.rs`). |
 | `0010-device-lost-closes-the-game.patch` | When the driver takes the graphics device away (a GPU reset or crash) the game shows a message (English or Spanish) and closes, instead of going on with a frozen picture; the log says on which card, in which scene and at which frame (`lost.rs`, `lib.rs`, `error_box` in `mh3u-rt`). `MH3U_DEVICE_LOST_EXIT=off` keeps the old behaviour. |
+| `0011-caches-survive-updates-and-thread-times.patch` | The on-disk caches of translated shaders and pipelines are now named after a hash of the translator's sources only (`build.rs`, `translations.rs`, `docs/translator.md`), so a release that changes just the rest of the graphics code no longer throws them away. Two new lines in the timing report: `[gfx threads]` (the CPU each thread used, `thread_cpu_times` in `mh3u-rt`) and `[gfx gpu]` (how long the GPU takes to finish a frame once the queue has all its work; `perf.rs`, `queue.rs`). |
 
 ## Reproducing the binary
 
@@ -34,7 +35,8 @@ git apply --ignore-whitespace <path>/0007-fix-character-colours.patch
 git apply --ignore-whitespace <path>/0008-fix-stale-colour-buffers.patch
 git apply --ignore-whitespace <path>/0009-gpu-queue-thread-by-vendor.patch
 git apply --ignore-whitespace <path>/0010-device-lost-closes-the-game.patch
+git apply --ignore-whitespace <path>/0011-caches-survive-updates-and-thread-times.patch
 cargo build --release -p mh3u-tools
 ```
 
-Verified: the ten patches apply cleanly on `41d3a9b`, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.
+Verified: the eleven patches apply cleanly on `41d3a9b`, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.

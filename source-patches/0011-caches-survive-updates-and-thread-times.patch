@@ -1,0 +1,328 @@
+diff --git a/crates/mh3u-gfx/build.rs b/crates/mh3u-gfx/build.rs
+index f42087a..984230e 100644
+--- a/crates/mh3u-gfx/build.rs
++++ b/crates/mh3u-gfx/build.rs
+@@ -1,7 +1,8 @@
+ //! Stamps the build with the commit it was made from (`MH3U_BUILD_COMMIT`, "+changes" when the working tree differs from it), so a log
+-//! or a frame dump tells which code made it; and with a hash of the shader translator's and the graphics code's sources
+-//! (`MH3U_SHADER_SOURCE`), which names the on-disk caches of translated shaders and pipelines: they stay valid across commits that do
+-//! not change that code, and a build whose translator differs in any way does not read them.
++//! or a frame dump tells which code made it; and with a hash of the shader translator's sources (`MH3U_SHADER_SOURCE`), which names the
++//! on-disk caches of translated shaders and pipelines: they stay valid across commits that do not change the translator, and a build
++//! whose translator differs in any way does not read them. What the graphics code feeds the translator is not in the hash: it is in the
++//! cache keys (`translation_key` in `draw.rs`), so a change to it bumps the `vs`/`ps` tag there.
+ 
+ use std::process::Command;
+ 
+@@ -24,10 +25,9 @@ fn main() {
+     }
+     // FNV-1a over each file's path (relative to its crate) and contents, in a sorted order
+     let mut files = Vec::new();
+-    for root in ["../mh3u-latte/src", "src"] {
+-        println!("cargo:rerun-if-changed={root}");
+-        collect(std::path::Path::new(root), root, &mut files);
+-    }
++    let root = "../mh3u-latte/src";
++    println!("cargo:rerun-if-changed={root}");
++    collect(std::path::Path::new(root), root, &mut files);
+     files.sort();
+     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+     for (name, path) in &files {
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index 7731f80..9e0773f 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -28,7 +28,8 @@ pub use gx2::Gx2;
+ /// The commit this build was made from ("+changes" when the working tree differed), printed at start and written into frame dumps.
+ pub const BUILD: &str = env!("MH3U_BUILD_COMMIT");
+ 
+-/// A hash of the translator's and the graphics code's sources (see `build.rs`): what the on-disk caches are valid for.
++/// A hash of the translator's sources (see `build.rs`): what the on-disk caches are valid for. What the graphics code gives the
++/// translator is in the caches' keys instead (`translation_key`).
+ pub const SHADER_SOURCE: &str = env!("MH3U_SHADER_SOURCE");
+ 
+ use anyhow::{Context, Result};
+diff --git a/crates/mh3u-gfx/src/perf.rs b/crates/mh3u-gfx/src/perf.rs
+index 3124196..be76841 100644
+--- a/crates/mh3u-gfx/src/perf.rs
++++ b/crates/mh3u-gfx/src/perf.rs
+@@ -8,8 +8,45 @@
+ //!   in the game), and after it how the next frames went (the slowest, the mean, the pipelines, the shaders and the textures).
+ 
+ use crate::pipelines::PipelineCounts;
++use std::sync::OnceLock;
++use std::sync::atomic::{AtomicU64, Ordering};
+ use std::time::{Duration, Instant};
+ 
++/// How long the GPU took to finish a frame's work after the queue had it all (microseconds): the sum, the longest and how many frames,
++/// for the `[gfx gpu]` line. Not the GPU's own time for the frame (that needs timestamp queries): it also holds the wait behind earlier
++/// frames, so a GPU that keeps up shows a little more than one frame's work, and one that falls behind shows it growing.
++static LAG_SUM_US: AtomicU64 = AtomicU64::new(0);
++static LAG_MAX_US: AtomicU64 = AtomicU64::new(0);
++static LAG_FRAMES: AtomicU64 = AtomicU64::new(0);
++
++/// Called just before a frame is presented, with everything of the frame submitted: notes when the GPU has finished it.
++pub(crate) fn watch_gpu(queue: &wgpu::Queue) {
++    static ON: OnceLock<bool> = OnceLock::new();
++    if !*ON.get_or_init(|| std::env::var_os("MH3U_GFX_TIMES").is_some() || std::env::var_os("MH3U_FPS").is_some()) {
++        return;
++    }
++    let at = Instant::now();
++    queue.on_submitted_work_done(move || {
++        let us = at.elapsed().as_micros() as u64;
++        LAG_SUM_US.fetch_add(us, Ordering::Relaxed);
++        LAG_MAX_US.fetch_max(us, Ordering::Relaxed);
++        LAG_FRAMES.fetch_add(1, Ordering::Relaxed);
++    });
++}
++
++/// The `[gfx gpu]` line of the frames since the last one (and starts the next count).
++fn gpu_text() -> Option<String> {
++    let frames = LAG_FRAMES.swap(0, Ordering::Relaxed);
++    let (sum, max) = (LAG_SUM_US.swap(0, Ordering::Relaxed), LAG_MAX_US.swap(0, Ordering::Relaxed));
++    (frames > 0).then(|| {
++        format!(
++            "[gfx gpu] {frames} frames finished by the GPU: {:.2} ms on average after the queue had all their work, {:.2} ms at most",
++            sum as f64 / frames as f64 / 1000.0,
++            max as f64 / 1000.0
++        )
++    })
++}
++
+ /// New pipelines and shader translations in one frame that mark an area change.
+ pub(crate) const AREA_WORK: u64 = 8;
+ /// How many frames after an area change are followed.
+@@ -120,6 +157,36 @@ pub(crate) struct Perf {
+     pub frame_gfx: Duration,
+     /// The frame that ended at the last swap: its milliseconds, and how many of them were in graphics calls.
+     pub last: (f64, f64),
++    /// Each thread's CPU time (ms) when the window began, for the `[gfx threads]` line.
++    threads: std::collections::HashMap<u32, f64>,
++}
++
++/// The `[gfx threads]` line: the CPU each thread used in the `secs` since `before`, as a percentage of one core, busiest first, leaving
++/// out those under 2 %. `now` and `before` are `mh3u_rt::thread_cpu_times` (a thread not in `before` is new: all of its time counts).
++pub(crate) fn threads_text(now: &[(u32, String, f64)], before: &std::collections::HashMap<u32, f64>, secs: f64) -> String {
++    let mut used: Vec<(f64, String)> = now
++        .iter()
++        .map(|(tid, name, ms)| {
++            let pct = (ms - before.get(tid).copied().unwrap_or(0.0)) / (secs * 10.0);
++            (
++                pct,
++                if name.is_empty() {
++                    format!("thread {tid}")
++                } else {
++                    format!("{name} ({tid})")
++                },
++            )
++        })
++        .collect();
++    let total: f64 = used.iter().map(|(p, _)| p).sum();
++    used.retain(|(p, _)| *p >= 2.0);
++    used.sort_by(|a, b| b.0.total_cmp(&a.0));
++    let list: Vec<String> = used.iter().map(|(p, n)| format!("{n} {p:.0}%")).collect();
++    format!(
++        "[gfx threads] {} threads, {total:.0}% of one core in all: {}",
++        now.len(),
++        list.join(", ")
++    )
+ }
+ 
+ fn minus(a: PipelineCounts, b: PipelineCounts) -> PipelineCounts {
+@@ -177,6 +244,7 @@ impl Perf {
+             window_pipes: PipelineCounts::default(),
+             frame_gfx: Duration::ZERO,
+             last: (0.0, 0.0),
++            threads: Default::default(),
+         }
+     }
+ 
+@@ -284,6 +352,13 @@ impl Perf {
+                 w.examined as f64 / w.shader_invalidates.max(1) as f64,
+                 w.invalidate_time.as_secs_f64() * 1000.0 / per
+             ));
++            out.extend(gpu_text());
++            let threads = mh3u_rt::thread_cpu_times();
++            // the first window only takes the starting point: the threads' times so far cover the whole run, not this window
++            if !self.threads.is_empty() {
++                out.push(threads_text(&threads, &self.threads, secs));
++            }
++            self.threads = threads.into_iter().map(|(tid, _, ms)| (tid, ms)).collect();
+             self.since = now;
+         }
+         out
+@@ -374,6 +449,31 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn the_threads_line_gives_each_threads_share_of_a_core_busiest_first() {
++        let before = std::collections::HashMap::from([(1, 1000.0), (2, 500.0)]);
++        let now = vec![
++            (1, "game".to_string(), 1750.0),
++            (2, String::new(), 510.0),
++            (3, "mh3u gpu queue".to_string(), 540.0),
++        ];
++        // 10 s: thread 1 used 750 ms (7.5 %, shown as 8), thread 2 10 ms, thread 3 (new) 540 ms (5.4 %)
++        let line = threads_text(&now, &before, 10.0);
++        assert_eq!(
++            line, "[gfx threads] 3 threads, 13% of one core in all: game (1) 8%, mh3u gpu queue (3) 5%",
++            "{line}"
++        );
++    }
++
++    #[test]
++    fn the_runtime_lists_its_own_threads_with_their_cpu_time() {
++        let threads = mh3u_rt::thread_cpu_times();
++        if cfg!(windows) {
++            assert!(!threads.is_empty());
++            assert!(threads.iter().all(|(_, _, ms)| *ms >= 0.0));
++        }
++    }
++
+     #[test]
+     fn quiet_frames_mark_nothing() {
+         let mut p = Perf::from_env();
+diff --git a/crates/mh3u-gfx/src/queue.rs b/crates/mh3u-gfx/src/queue.rs
+index 798da2e..fec9a0d 100644
+--- a/crates/mh3u-gfx/src/queue.rs
++++ b/crates/mh3u-gfx/src/queue.rs
+@@ -110,6 +110,7 @@ impl OrderedQueue {
+             *self.presents.0.lock().unwrap() += 1;
+             self.send(Op::Present(frame));
+         } else {
++            crate::perf::watch_gpu(&self.raw);
+             self.raw.present(frame);
+         }
+     }
+@@ -146,6 +147,7 @@ fn run(raw: wgpu::Queue, rx: Receiver<Op>, presents: Presents) {
+                 raw.submit(encoders.into_iter().map(|e| e.finish()));
+             }
+             Op::Present(frame) => {
++                crate::perf::watch_gpu(&raw);
+                 raw.present(frame);
+                 let (count, done) = &*presents;
+                 *count.lock().unwrap() -= 1;
+diff --git a/crates/mh3u-gfx/src/translations.rs b/crates/mh3u-gfx/src/translations.rs
+index ead5e41..3486cce 100644
+--- a/crates/mh3u-gfx/src/translations.rs
++++ b/crates/mh3u-gfx/src/translations.rs
+@@ -1,7 +1,8 @@
+ //! Translated shaders kept on disk, so an area entered again, or the same area in a later run, does not translate its shaders again.
+ //!
+-//! The folder is `<cache>/translations/<SHADER_SOURCE>`: the hash of the translator's and the graphics code's sources (`build.rs`), so a
+-//! build whose translation could differ never reads another build's. `translations.txt` has one line per translation: its key (a hash of
++//! The folder is `<cache>/translations/<SHADER_SOURCE>`: the hash of the translator's sources (`build.rs`), so a build whose translator
++//! differs never reads another build's. What the graphics code gives the translator is in each key instead (`translation_key`).
++//! `translations.txt` has one line per translation: its key (a hash of
+ //! the program bytes and of everything else the translation depends on), the hash of its WGSL (`shaders/<id>.wgsl`, the same names as
+ //! the pipeline cache's), and its interface, with a check hash at the end. A line that does not check out, or whose WGSL is missing or
+ //! does not hash to its id, is not used (the shader is translated as if it were not there).
+diff --git a/crates/mh3u-rt/Cargo.toml b/crates/mh3u-rt/Cargo.toml
+index 423a2b4..d90432a 100644
+--- a/crates/mh3u-rt/Cargo.toml
++++ b/crates/mh3u-rt/Cargo.toml
+@@ -23,4 +23,4 @@ memmap2 = "0.9"
+ 
+ # the guest's memory is reserved and committed on first touch (see src/memory.rs)
+ [target.'cfg(windows)'.dependencies]
+-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Memory", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_UI_WindowsAndMessaging"] }
++windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Memory", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index 28c9ae0..27ca167 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -101,6 +101,67 @@ pub fn error_box(title: &str, text: &str) {
+     eprintln!("{title}: {text}");
+ }
+ 
++/// The CPU time (kernel + user) each thread of this process has used so far: (thread id, its name if it has one, milliseconds).
++/// For the per-thread load of the timing reports. Windows only; threads that cannot be opened are left out.
++#[cfg(windows)]
++pub fn thread_cpu_times() -> Vec<(u32, String, f64)> {
++    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE, LocalFree};
++    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
++        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
++    };
++    use windows_sys::Win32::System::Threading::{
++        GetCurrentProcessId, GetThreadDescription, GetThreadTimes, OpenThread, THREAD_QUERY_LIMITED_INFORMATION,
++    };
++    let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32 | u64::from(t.dwLowDateTime)) as f64 / 10_000.0;
++    let mut out = Vec::new();
++    // SAFETY: plain Win32 calls on handles opened here and closed before the end; the structs are filled in by the calls (`dwSize` is
++    // set as `Thread32First` asks), and the description buffer the system allocates is read within its terminating zero and freed.
++    unsafe {
++        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
++        if snapshot == INVALID_HANDLE_VALUE {
++            return out;
++        }
++        let pid = GetCurrentProcessId();
++        let mut entry: THREADENTRY32 = std::mem::zeroed();
++        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
++        let mut more = Thread32First(snapshot, &mut entry) != 0;
++        while more {
++            if entry.th32OwnerProcessID == pid {
++                let thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, 0, entry.th32ThreadID);
++                if !thread.is_null() {
++                    let zero = FILETIME {
++                        dwLowDateTime: 0,
++                        dwHighDateTime: 0,
++                    };
++                    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
++                    if GetThreadTimes(thread, &mut created, &mut exited, &mut kernel, &mut user) != 0 {
++                        let mut name = String::new();
++                        let mut text: *mut u16 = std::ptr::null_mut();
++                        if GetThreadDescription(thread, &mut text) >= 0 && !text.is_null() {
++                            let mut len = 0;
++                            while *text.add(len) != 0 {
++                                len += 1;
++                            }
++                            name = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
++                            LocalFree(text.cast());
++                        }
++                        out.push((entry.th32ThreadID, name, ticks(kernel) + ticks(user)));
++                    }
++                    CloseHandle(thread);
++                }
++            }
++            more = Thread32Next(snapshot, &mut entry) != 0;
++        }
++        CloseHandle(snapshot);
++    }
++    out
++}
++
++#[cfg(not(windows))]
++pub fn thread_cpu_times() -> Vec<(u32, String, f64)> {
++    Vec::new()
++}
++
+ /// MH3U_TIMES_WINDOW: how many seconds each timing report covers (10 when it is not set or not a number).
+ pub fn times_window() -> std::time::Duration {
+     static WINDOW: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+diff --git a/docs/translator.md b/docs/translator.md
+index c8bfca4..f5a5c92 100644
+--- a/docs/translator.md
++++ b/docs/translator.md
+@@ -226,7 +226,7 @@ with their text and the cloth background, upright, in the right places (the hunt
+   - *Render pipelines* (`pipelines.rs`): found by the shaders' translations and the state the pipeline holds; a new one is made on a
+     worker thread and its draw is not drawn until it is there (usually a frame or two; `MH3U_GFX_ASYNC_PIPELINES=off` makes the draw
+     wait instead, as before). Each one made is written down under `<out>/cache/pipelines/<key>/` (its shaders' WGSL in `shaders/`,
+-    its state as a line of `pipelines.txt`; the key is a hash of the graphics sources (`SHADER_SOURCE`, below) and the adapter and
++    its state as a line of `pipelines.txt`; the key is a hash of the translator's sources (`SHADER_SOURCE`, below) and the adapter and
+     driver, written in `about.txt`), and all
+     of them are made again on the workers at the next start, found then by a hash of the WGSL whatever addresses the shaders have.
+     `MH3U_GFX_PIPELINE_CACHE=off` turns the disk cache off, `MH3U_GFX_CACHE_DIR` puts it elsewhere; deleting the folder is always
+@@ -238,8 +238,10 @@ with their text and the cloth background, upright, in the right places (the hunt
+     - The key is a hash of the program bytes and everything else the translation depends on: the fetch shader, half z,
+       the semantic table and the loop constants for a vertex shader; the inputs, the texture kinds and selectors, the alpha
+       test and the loop constants for a pixel shader.
+-    - `SHADER_SOURCE` is a hash of the sources of `mh3u-latte` and `mh3u-gfx`, made by `build.rs`. The cache stays valid
+-      across commits that do not touch them, and a build whose translator differs at all never reads it.
++    - `SHADER_SOURCE` is a hash of the sources of `mh3u-latte`, made by `build.rs`. The cache stays valid across commits
++      that do not touch it, and a build whose translator differs at all never reads it. Changes to `mh3u-gfx` do not change
++      it, so a change there to what the translator is given or to how its output is used must change the tag `vs`/`ps` of
++      `translation_key` (`draw.rs`) or the line tag of `translations.txt`/`pipelines.txt`, or old caches would be used.
+     - A shader whose key is there is not translated. A line that does not check out, or whose WGSL is missing or changed,
+       is not used.
+     - Shader modules are kept by the hash of their WGSL and shared with the pipeline workers. The modules the workers make
