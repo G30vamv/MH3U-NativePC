@@ -82,11 +82,24 @@ class GpuThreadSettingTests(unittest.TestCase):
         self.assertEqual(core.gpu_thread_env({}), {})
         self.assertEqual(core.gpu_thread_env({"gpu_thread": "auto"}), {})
 
-    def test_on_and_off_are_passed_to_the_engine(self):
+    def test_off_turns_off_both_threads_and_on_forces_only_the_queue(self):
         self.assertEqual(core.gpu_thread_env({"gpu_thread": "on"}), {"MH3U_GFX_THREAD": "on"})
-        self.assertEqual(core.gpu_thread_env({"gpu_thread": "off"}), {"MH3U_GFX_THREAD": "off"})
+        self.assertEqual(core.gpu_thread_env({"gpu_thread": "off"}), {"MH3U_GFX_THREAD": "off", "MH3U_GFX_RESOLVER": "off"})
 
     def test_a_config_from_the_first_switch_keeps_its_meaning(self):
         self.assertEqual(core.gpu_thread_mode({"gpu_thread": True}), "auto")
         self.assertEqual(core.gpu_thread_mode({"gpu_thread": False}), "off")
-        self.assertEqual(core.gpu_thread_env({"gpu_thread": False}), {"MH3U_GFX_THREAD": "off"})
+        self.assertEqual(core.gpu_thread_env({"gpu_thread": False}), {"MH3U_GFX_THREAD": "off", "MH3U_GFX_RESOLVER": "off"})
+
+    def test_the_window_choices_are_saved_as_the_modes(self):
+        class Stub:
+            def __init__(self):
+                self.config, self.saved = {}, 0
+
+            def save_config(self):
+                self.saved += 1
+
+        for text, mode in (("Automático (recomendado)", "auto"), ("Apagado", "off"), ("Siempre activado", "on")):
+            stub = Stub()
+            core.LauncherLogic.on_gpu_thread_changed(stub, text)
+            self.assertEqual((stub.config["gpu_thread"], stub.saved), (mode, 1), text)
