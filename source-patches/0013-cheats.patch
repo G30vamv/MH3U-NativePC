@@ -1,0 +1,1100 @@
+diff --git a/crates/mh3u-gfx/src/overlay.rs b/crates/mh3u-gfx/src/overlay.rs
+index 8317b0f..5fe1644 100644
+--- a/crates/mh3u-gfx/src/overlay.rs
++++ b/crates/mh3u-gfx/src/overlay.rs
+@@ -317,7 +317,7 @@ impl Overlay {
+             self.follow_save();
+         }
+         self.notices.retain(|(_, t)| t.elapsed() < NOTICE);
+-        if !self.open && self.notices.is_empty() && !self.fps_enabled {
++        if !self.open && self.notices.is_empty() && !self.fps_enabled && !mh3u_rt::combat::enabled() {
+             // nothing to draw: the window's size and scale are kept, its events are not wanted
+             let pending = INPUT.lock().unwrap_or_else(|e| e.into_inner()).take();
+             next_input(pending, &mut self.last_input);
+@@ -679,6 +679,83 @@ impl Overlay {
+         }
+     }
+ 
++    /// The monsters' life and the damage meter (read-only, `mh3u_rt::combat`), under the FPS counter, while a hunter plays.
++    fn combat_hud(&self, ctx: &egui::Context) {
++        if !mh3u_rt::combat::enabled() || !in_game() {
++            return;
++        }
++        let l = self.live.lang;
++        let hud = mh3u_rt::combat::snapshot();
++        if hud.monsters.is_empty() && hud.dealt == 0 {
++            return;
++        }
++        let top = if self.fps_enabled { 52.0 } else { 16.0 };
++        egui::Area::new(egui::Id::new("combat_hud"))
++            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, top))
++            .order(egui::Order::Foreground)
++            .interactable(false)
++            .show(ctx, |ui| {
++                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
++                egui::Frame::popup(ui.style())
++                    .fill(egui::Color32::from_black_alpha(190))
++                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3e, 0x44, 0x51)))
++                    .show(ui, |ui| {
++                        if hud.life_on {
++                            for m in &hud.monsters {
++                                let fraction = (m.hp as f32 / m.max.max(1) as f32).clamp(0.0, 1.0);
++                                let colour = if fraction > 0.5 {
++                                    egui::Color32::from_rgb(0x98, 0xc3, 0x79)
++                                } else if fraction > 0.25 {
++                                    egui::Color32::from_rgb(0xe5, 0xc0, 0x7b)
++                                } else {
++                                    egui::Color32::from_rgb(0xe0, 0x6c, 0x75)
++                                };
++                                ui.label(
++                                    egui::RichText::new(format!(
++                                        "{} {:03}   {} / {}  ({:.0} %)",
++                                        l.p("Monster", "Monstruo"),
++                                        m.id,
++                                        m.hp,
++                                        m.max,
++                                        fraction * 100.0
++                                    ))
++                                    .monospace()
++                                    .size(13.0),
++                                );
++                                ui.add(egui::ProgressBar::new(fraction).desired_width(230.0).desired_height(8.0).fill(colour));
++                            }
++                        }
++                        if hud.meter_on {
++                            if hud.life_on && !hud.monsters.is_empty() {
++                                ui.separator();
++                            }
++                            ui.label(
++                                egui::RichText::new(format!(
++                                    "{}: {}   ({} {})",
++                                    l.p("Damage", "Daño"),
++                                    hud.dealt,
++                                    l.p("yours", "tuyo"),
++                                    hud.dealt_own
++                                ))
++                                .monospace()
++                                .size(13.0),
++                            );
++                            ui.label(
++                                egui::RichText::new(format!(
++                                    "DPS: {:.0}  (5 s)   {} {:.0}",
++                                    hud.dps,
++                                    l.p("mean", "media"),
++                                    hud.dps_mean
++                                ))
++                                .monospace()
++                                .size(13.0)
++                                .color(egui::Color32::from_rgb(0x56, 0xb6, 0xc2)),
++                            );
++                        }
++                    });
++            });
++    }
++
+     fn ui(&mut self, ctx: &egui::Context) {
+         let l = self.live.lang;
+         if self.fps_enabled {
+@@ -710,6 +787,7 @@ impl Overlay {
+                         });
+                 });
+         }
++        self.combat_hud(ctx);
+         for (k, (text, _)) in self.notices.iter().enumerate() {
+             egui::Area::new(egui::Id::new(("notice", k)))
+                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0 + 40.0 * k as f32))
+diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
+new file mode 100644
+index 0000000..4cae926
+--- /dev/null
++++ b/crates/mh3u-rt/src/cheats.rs
+@@ -0,0 +1,555 @@
++//! Cheats, opt-in: `MH3U_CHEATS=onehit=1000,sharp,god,money=10,items` (the launcher writes it from its Cheats section). Each cheat
++//! is one row of `CHEATS`: its id, the hooks it needs (names of `mods/hooks.txt`) and how to make the callback of each. To add a
++//! cheat: write its callback maker, add the row, add the hook to `mods/hooks.txt` and a row to the launcher's `CHEATS` list.
++//!
++//! The addresses are those of the update's executable (`docs/ghidra.md`), read with Ghidra:
++//! - `hit_resolve` is `f_02129ef4`, the function that resolves one hit: r4 = the target, r5 = the hit record, whose byte +6 is the
++//!   attacker's class (0 = a hunter, 1 = a monster, 2 = an object such as a shell, a trap or a rock), byte +7 the class of whoever
++//!   made that object, words +0x10 / +0x14 the attacker and the owner, and float +0x44 the base damage the function multiplies by
++//!   weapon and hit zone.
++//! - `sharp_change` is `f_0285f530(hunter, change, flag)`: adds `change` to the weapon's sharpness (negative: it wears).
++//! - `money_add` is `f_0219c720(_, change, &money)` and `item_to_pouch` is `f_0219aeac(save, item, count, ...)`: a negative count
++//!   is an item taken out; the two return addresses below are the calls of the function that uses an item in a quest.
++//!
++//! Every cheat writes to the log what it saw and what it did, the first times it acts and then now and then (`[cheats] ...`), so a
++//! log shows whether a cheat fires at all. `MH3U_CHEATS_PROBE=1` also watches what changes in the target of the monsters' hits
++//! (to find where a hunter's health is).
++
++use crate::guest::Guest;
++use crate::hooks::{Callback, Hook, Registry};
++use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
++use std::sync::{Mutex, OnceLock};
++
++/// Hunter's hits (`hit_resolve`'s record, byte +6, or +7 for an object).
++const KIND_HUNTER: u8 = 0;
++/// Monster's hits.
++const KIND_MONSTER: u8 = 1;
++/// An object (shell, trap, rock...): the class of its maker is in byte +7.
++const KIND_OBJECT: u8 = 2;
++/// Where the base damage of a hit is in its record.
++const BASE_DAMAGE: u32 = 0x44;
++/// Return addresses of the two calls `f_0285ecd4` (use an item in a quest) makes to `item_to_pouch`.
++const ITEM_USE_RETURNS: [u32; 2] = [0x0285_ed6c, 0x0285_edac];
++
++/// How many times a cheat writes to the log when it acts, and then how often.
++const LOG_FIRST: u32 = 12;
++const LOG_EVERY: u32 = 250;
++
++/// Whether the cheat's `n`th action (counted from 0) goes to the log.
++fn should_log(n: u32) -> bool {
++    n < LOG_FIRST || (n + 1).is_multiple_of(LOG_EVERY)
++}
++
++struct Cheat {
++    id: &'static str,
++    /// The hooks it needs and what runs on each; the maker gets the cheat's value (the multiplier, if it has one).
++    hooks: &'static [(&'static str, fn(f32) -> Callback)],
++    /// The value when `MH3U_CHEATS` does not give one.
++    default: f32,
++}
++
++/// Every cheat. An id not in this list is reported and ignored.
++const CHEATS: &[Cheat] = &[
++    // "One Hit Kill": the hunter's hits do `value` times the damage
++    Cheat {
++        id: "onehit",
++        hooks: &[("hit_resolve", one_hit_kill)],
++        default: 1000.0,
++    },
++    // infinite sharpness: the weapon never wears
++    Cheat {
++        id: "sharp",
++        hooks: &[("sharp_change", infinite_sharpness)],
++        default: 1.0,
++    },
++    // invincible: the hits on the hunter do no damage
++    Cheat {
++        id: "god",
++        hooks: &[("hunter_hit", invincible)],
++        default: 1.0,
++    },
++    // more zenny: every gain of zenny is `value` times bigger
++    Cheat {
++        id: "money",
++        hooks: &[("money_add", more_zenny)],
++        default: 10.0,
++    },
++    // infinite items: the items used in a quest are not taken out of the pouch
++    Cheat {
++        id: "items",
++        hooks: &[("item_to_pouch", infinite_items)],
++        default: 1.0,
++    },
++    // read-only: the life of the monsters of the quest, on the overlay (`combat.rs`)
++    Cheat {
++        id: "monsterhp",
++        hooks: &[("monster_init", monster_life)],
++        default: 1.0,
++    },
++    // read-only: the damage the monsters' life goes down by, and the DPS of the hunter's own hits (`combat.rs`)
++    Cheat {
++        id: "dmgmeter",
++        hooks: &[("monster_init", damage_meter_monsters), ("hit_resolve", damage_meter_hits)],
++        default: 1.0,
++    },
++];
++
++/// `MH3U_CHEATS` as (id, value): `onehit=1000,sharp` is [("onehit", Some(1000.0)), ("sharp", None)]. Bad pieces are left out.
++fn parse(spec: &str) -> Vec<(String, Option<f32>)> {
++    spec.split(',')
++        .filter_map(|piece| {
++            let piece = piece.trim();
++            let (id, value) = match piece.split_once('=') {
++                Some((id, v)) => (id.trim(), Some(v.trim().parse::<f32>().ok().filter(|v| v.is_finite() && *v >= 1.0)?)),
++                None => (piece, None),
++            };
++            (!id.is_empty()).then(|| (id.to_ascii_lowercase(), value))
++        })
++        .collect()
++}
++
++/// Registers the callbacks of the cheats `MH3U_CHEATS` asks for; gives how many cheats are on.
++pub fn register(r: &mut Registry) -> usize {
++    // the probe goes first, so it sees a hit's record as the game made it, before a cheat changes it
++    if probing() && r.on("hit_resolve", Box::new(probe_hit)) {
++        eprintln!("[cheats] probe on: the target of each monster hit is compared with how it was at the one before");
++    }
++    let Ok(spec) = std::env::var("MH3U_CHEATS") else { return 0 };
++    let mut on = 0;
++    for (id, value) in parse(&spec) {
++        let Some(cheat) = CHEATS.iter().find(|c| c.id == id) else {
++            eprintln!("[cheats] unknown cheat `{id}` (MH3U_CHEATS), left out");
++            continue;
++        };
++        let value = value.unwrap_or(cheat.default);
++        let mut missing = Vec::new();
++        for (hook, make) in cheat.hooks {
++            if !r.on(hook, make(value)) {
++                missing.push(*hook);
++            }
++        }
++        if missing.is_empty() {
++            on += 1;
++            eprintln!("[cheats] {id} on (value {value})");
++        } else {
++            eprintln!("[cheats] {id} needs the hook(s) {missing:?}: build the game again with the launcher's current mods/hooks.txt");
++        }
++    }
++    on
++}
++
++/// Said when the game has no hooks at all (it was translated without a hooks list): the cheats cannot work then.
++pub fn no_hooks_warning() {
++    if std::env::var("MH3U_CHEATS").is_ok_and(|v| !v.trim().is_empty()) {
++        eprintln!(
++            "[cheats] cheats are on but this build of the game has no hooks, so none can work: build the game again with a launcher that has mods/hooks.txt"
++        );
++    }
++}
++
++/// The class of whoever a hit is from: the attacker's, or, for an object, its maker's.
++fn attacker(g: &Guest, record: u32) -> u8 {
++    match g.u8(record + 6) {
++        KIND_OBJECT => g.u8(record + 7),
++        kind => kind,
++    }
++}
++
++/// Whether the target of a hit is what made it (a hunter's own explosion): such hits are left alone.
++fn self_hit(g: &Guest, record: u32, target: u32) -> bool {
++    target != 0 && (g.u32(record + 0x10) == target || g.u32(record + 0x14) == target)
++}
++
++fn one_hit_kill(times: f32) -> Callback {
++    let acted = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        let (target, record) = (h.ctx.r[4], h.ctx.r[5]);
++        let g = Guest::new(h.ctx.mem);
++        if record == 0 || attacker(&g, record) != KIND_HUNTER || self_hit(&g, record, target) {
++            return;
++        }
++        let damage = f32::from_bits(g.u32(record + BASE_DAMAGE));
++        if damage > 0.0 {
++            let more = damage * times;
++            g.put_u32(record + BASE_DAMAGE, more.to_bits());
++            let n = acted.fetch_add(1, Relaxed);
++            if should_log(n) {
++                eprintln!("[cheats] onehit: hit {} on {target:#x}, base damage {damage} -> {more}", n + 1);
++            }
++        }
++    })
++}
++
++/// What the hunter's hit resolver gets (`hunter_hit` is `f_0212c098(hit check, hunter, hit record, ..)`, the counterpart of
++/// `hit_resolve` for a hunter that is hit: it adds the damage to the hunter's state, `+0xfc` of `*(hunter + 0xe30)`, and the status
++/// effects after it). With the record's base damage and status amount at 0, a hit does nothing more than push.
++const STATUS_AMOUNT: u32 = 0x54;
++
++fn invincible(_: f32) -> Callback {
++    let acted = AtomicU32::new(0);
++    let others = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        let (hunter, record) = (h.ctx.r[4], h.ctx.r[5]);
++        let g = Guest::new(h.ctx.mem);
++        if record == 0 {
++            return;
++        }
++        // only the hunter that plays here: the other players' own games work out their hits
++        let me = crate::combat::local_hunter(&g);
++        if me == 0 || hunter != me {
++            let n = others.fetch_add(1, Relaxed);
++            if n < 3 {
++                eprintln!("[cheats] god: a hit on {hunter:#x}, which is not the hunter that plays here ({me:#x}), left alone");
++            }
++            return;
++        }
++        let before = f32::from_bits(g.u32(record + BASE_DAMAGE));
++        g.put_u32(record + BASE_DAMAGE, 0.0f32.to_bits());
++        g.put_u32(record + STATUS_AMOUNT, 0.0f32.to_bits());
++        let n = acted.fetch_add(1, Relaxed);
++        if should_log(n) {
++            eprintln!(
++                "[cheats] god: hit {} on the hunter {hunter:#x} (attacker class +6 {}), base damage {before} -> 0; type +0x48 {:#x}, flags +0x50 {:#x}",
++                n + 1,
++                g.u8(record + 6),
++                g.u8(record + 0x48),
++                g.u32(record + 0x50),
++            );
++        }
++    })
++}
++
++/// The life of the monsters on the overlay.
++fn monster_life(_: f32) -> Callback {
++    crate::combat::enable_life();
++    crate::combat::monster_init()
++}
++
++/// The damage meter needs to know the monsters, and which hits are the hunter's own.
++fn damage_meter_monsters(_: f32) -> Callback {
++    crate::combat::enable_meter();
++    crate::combat::monster_init()
++}
++
++fn damage_meter_hits(_: f32) -> Callback {
++    crate::combat::mark_own_hits()
++}
++
++fn infinite_sharpness(_: f32) -> Callback {
++    let acted = AtomicU32::new(0);
++    let seen = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        // r4 = the change: only the wear (negative) is dropped; sharpening goes on
++        let change = h.ctx.r[4] as i32;
++        if change < 0 {
++            h.ctx.r[4] = 0;
++            let n = acted.fetch_add(1, Relaxed);
++            if should_log(n) {
++                eprintln!("[cheats] sharp: wear {change} dropped (flag {}, lr {:#x}), time {}", h.ctx.r[5], h.ctx.lr, n + 1);
++            }
++        } else {
++            let n = seen.fetch_add(1, Relaxed);
++            if n < 3 {
++                eprintln!("[cheats] sharp: change {change} kept (sharpening)");
++            }
++        }
++    })
++}
++
++/// The zenny a gain of `change` becomes with the multiplier (a loss, or nothing, stays as it is).
++fn zenny(change: i32, times: f32) -> i32 {
++    if change <= 0 {
++        return change;
++    }
++    (f64::from(change) * f64::from(times)).min(f64::from(i32::MAX)) as i32
++}
++
++fn more_zenny(times: f32) -> Callback {
++    let seen = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        let change = h.ctx.r[4] as i32;
++        let more = zenny(change, times);
++        h.ctx.r[4] = more as u32;
++        let n = seen.fetch_add(1, Relaxed);
++        if should_log(n) {
++            if more == change {
++                eprintln!("[cheats] money: change {change} left as it is (lr {:#x})", h.ctx.lr);
++            } else {
++                eprintln!("[cheats] money: gain {change} -> {more} (lr {:#x}, money at {:#x})", h.ctx.lr, h.ctx.r[5]);
++            }
++        }
++    })
++}
++
++/// Whether `item_to_pouch(.., count)` called from `lr` is an item used in a quest.
++fn item_used(lr: u32, count: u32) -> bool {
++    ITEM_USE_RETURNS.contains(&lr) && (count as i32) < 0
++}
++
++fn infinite_items(_: f32) -> Callback {
++    let acted = AtomicU32::new(0);
++    let others = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        if item_used(h.ctx.lr, h.ctx.r[5]) {
++            let n = acted.fetch_add(1, Relaxed);
++            if should_log(n) {
++                eprintln!("[cheats] items: item {:#x} used, {} taken out dropped (lr {:#x})", h.ctx.r[4], h.ctx.r[5] as i32, h.ctx.lr);
++            }
++            h.ctx.r[5] = 0;
++        } else if (h.ctx.r[5] as i32) < 0 {
++            // an item taken out from somewhere else (a shop, the box, a craft): stays, said a few times
++            let n = others.fetch_add(1, Relaxed);
++            if n < 5 {
++                eprintln!("[cheats] items: {} taken out from lr {:#x} is not an item used in a quest, kept", h.ctx.r[5] as i32, h.ctx.lr);
++            }
++        }
++        // a take-out of an item `item_used` does not know would be another caller of the use function: the log of the
++        // quest's last item use tells it
++    })
++}
++
++// ---- the probe: where is a hunter's health? ----
++
++fn probing() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| std::env::var("MH3U_CHEATS_PROBE").is_ok_and(|v| v.trim() == "1"))
++}
++
++/// What was in a stretch of the target's memory when a monster's hit began.
++struct Region {
++    base: u32,
++    bytes: Vec<u8>,
++}
++
++/// The target of the last monster hit and what its memory held then.
++static LAST: Mutex<Option<(u32, Vec<Region>)>> = Mutex::new(None);
++static DIFFS: AtomicU32 = AtomicU32::new(0);
++static HITS: AtomicU32 = AtomicU32::new(0);
++
++/// How much of a target object is kept, and how much of the data its +0xe30 points to.
++const TARGET_BYTES: usize = 0x2800;
++const DATA_BYTES: usize = 0x1400;
++
++fn plausible(address: u32) -> bool {
++    (0x0200_0000..0xB000_0000).contains(&address)
++}
++
++fn read_region(g: &Guest, base: u32, len: usize) -> Region {
++    let mut bytes = vec![0u8; len];
++    g.read(base, &mut bytes);
++    Region { base, bytes }
++}
++
++/// Runs first on every hit. Compares the target of the last monster hit with how it was then (16-bit values that went down by
++/// 1 to 1000, where a health that took the hit would show), and keeps the target of this one if a monster made it.
++fn probe_hit(h: &mut Hook) {
++    let (target, record) = (h.ctx.r[4], h.ctx.r[5]);
++    let g = Guest::new(h.ctx.mem);
++    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
++    if let Some((before_target, regions)) = last.take() {
++        let n = DIFFS.fetch_add(1, Relaxed);
++        if n < 25 {
++            let mut lines = 0;
++            for r in &regions {
++                let now = read_region(&g, r.base, r.bytes.len());
++                for off in (0..r.bytes.len() - 1).step_by(2) {
++                    let old = u16::from_be_bytes([r.bytes[off], r.bytes[off + 1]]);
++                    let new = u16::from_be_bytes([now.bytes[off], now.bytes[off + 1]]);
++                    if new < old && old - new <= 1000 && old <= 5000 && lines < 80 {
++                        eprintln!("[cheats probe] change {} (target {before_target:#x}) {:#x}+{off:#x}: {old} -> {new}", n + 1, r.base);
++                        lines += 1;
++                    }
++                }
++            }
++            if lines == 0 {
++                eprintln!("[cheats probe] change {} (target {before_target:#x}): nothing went down", n + 1);
++            }
++        }
++    }
++    if record != 0 && plausible(target) && attacker(&g, record) == KIND_MONSTER {
++        let n = HITS.fetch_add(1, Relaxed);
++        if n < 25 {
++            let words: Vec<String> = (0..0x1cu32).map(|i| format!("{:08x}", g.u32(record + 4 * i))).collect();
++            eprintln!("[cheats probe] monster hit {} on {target:#x}, record: {}", n + 1, words.join(" "));
++            let mut regions = vec![read_region(&g, target, TARGET_BYTES)];
++            let data = g.u32(target + 0xe30);
++            if plausible(data) {
++                regions.push(read_region(&g, data, DATA_BYTES));
++            }
++            *last = Some((target, regions));
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::collections::BTreeMap;
++
++    #[test]
++    fn the_spec_is_read_piece_by_piece() {
++        assert_eq!(
++            parse("onehit=1000, sharp ,MONEY=2.5,bad=x,=3,,god"),
++            vec![
++                ("onehit".to_string(), Some(1000.0)),
++                ("sharp".to_string(), None),
++                ("money".to_string(), Some(2.5)),
++                ("god".to_string(), None)
++            ]
++        );
++        // a multiplier under 1 or not a number would turn the cheat into a penalty: the piece is left out
++        assert!(parse("onehit=0,money=-5,items=nan").is_empty());
++    }
++
++    #[test]
++    fn zenny_grows_only_when_it_is_a_gain_and_never_overflows() {
++        assert_eq!(zenny(310, 10.0), 3100);
++        assert_eq!(zenny(-200, 10.0), -200);
++        assert_eq!(zenny(0, 10.0), 0);
++        assert_eq!(zenny(i32::MAX, 1000.0), i32::MAX);
++    }
++
++    #[test]
++    fn only_an_item_used_in_a_quest_is_not_taken_out() {
++        assert!(item_used(0x0285_edac, u32::MAX));
++        assert!(item_used(0x0285_ed6c, (-3i32) as u32));
++        assert!(!item_used(0x0285_edac, 2), "a gain stays");
++        assert!(!item_used(0x021d_397c, u32::MAX), "taking items out in a shop or the box stays");
++    }
++
++    #[test]
++    fn the_log_says_the_first_actions_and_then_now_and_then() {
++        assert!((0..LOG_FIRST).all(should_log));
++        assert!(!should_log(LOG_FIRST));
++        assert!(should_log(LOG_EVERY - 1));
++        assert!(!should_log(LOG_EVERY));
++    }
++
++    /// A hit record at `at`: attacker class `kind`, maker class `owner`, base damage `damage`.
++    fn hit(g: &Guest, at: u32, kind: u8, owner: u8, damage: f32) {
++        g.put_u8(at + 6, kind);
++        g.put_u8(at + 7, owner);
++        g.put_u32(at + BASE_DAMAGE, damage.to_bits());
++    }
++
++    fn damage(g: &Guest, at: u32) -> f32 {
++        f32::from_bits(g.u32(at + BASE_DAMAGE))
++    }
++
++    #[test]
++    fn an_object_hit_counts_for_whoever_made_the_object() {
++        let mut m = vec![0u8; 0x400];
++        let g = Guest::new(m.as_mut_ptr());
++        hit(&g, 0x100, KIND_OBJECT, KIND_HUNTER, 5.0);
++        assert_eq!(attacker(&g, 0x100), KIND_HUNTER, "a shell or a bomb of a hunter");
++        hit(&g, 0x100, KIND_OBJECT, KIND_MONSTER, 5.0);
++        assert_eq!(attacker(&g, 0x100), KIND_MONSTER, "a rock a monster threw");
++        hit(&g, 0x100, KIND_MONSTER, KIND_HUNTER, 5.0);
++        assert_eq!(attacker(&g, 0x100), KIND_MONSTER, "+7 matters only for an object");
++    }
++
++    #[test]
++    fn a_hit_on_the_one_that_made_it_is_a_self_hit() {
++        let mut m = vec![0u8; 0x400];
++        let g = Guest::new(m.as_mut_ptr());
++        g.put_u32(0x100 + 0x10, 0x2000);
++        g.put_u32(0x100 + 0x14, 0x3000);
++        assert!(self_hit(&g, 0x100, 0x2000));
++        assert!(self_hit(&g, 0x100, 0x3000));
++        assert!(!self_hit(&g, 0x100, 0x4000));
++        assert!(!self_hit(&g, 0x100, 0), "no target is nobody's self-hit");
++    }
++
++    /// The five cheats on the hooks they name, run through a registry like the game's.
++    #[test]
++    fn each_cheat_changes_what_it_should_on_its_hook() {
++        let list: BTreeMap<u32, String> = [
++            (0x0212_9ef4, "hit_resolve".to_string()),
++            (0x0212_c098, "hunter_hit".to_string()),
++            (0x0259_fc98, "monster_init".to_string()),
++            (0x0285_f530, "sharp_change".to_string()),
++            (0x0219_c720, "money_add".to_string()),
++            (0x0219_aeac, "item_to_pouch".to_string()),
++        ]
++        .into();
++        let mut r = Registry::new(&list);
++        for c in CHEATS {
++            for (hook, make) in c.hooks {
++                assert!(r.on(hook, make(if c.id == "onehit" { 1000.0 } else { 3.0 })), "{} is in the list", hook);
++            }
++        }
++        let mut m = vec![0u8; 0x400];
++        let g = Guest::new(m.as_mut_ptr());
++        let mut ctx = crate::game::new_ctx(m.as_mut_ptr());
++        ctx.r[4] = 0x300; // the target of the hits
++        ctx.r[5] = 0x100;
++        // the hunter's hit, base damage 10
++        hit(&g, 0x100, KIND_HUNTER, 0, 10.0);
++        r.run(0x0212_9ef4, &mut ctx);
++        assert_eq!(damage(&g, 0x100), 10_000.0);
++        // a hunter's own shell that hits the hunter is left as it is
++        hit(&g, 0x100, KIND_OBJECT, KIND_HUNTER, 10.0);
++        g.put_u32(0x100 + 0x14, 0x300);
++        r.run(0x0212_9ef4, &mut ctx);
++        assert_eq!(damage(&g, 0x100), 10.0, "self-hit");
++        g.put_u32(0x100 + 0x14, 0x500);
++        r.run(0x0212_9ef4, &mut ctx);
++        assert_eq!(damage(&g, 0x100), 10_000.0, "a hunter's shell on a monster");
++        // sharpness: wear dropped, sharpening kept
++        ctx.r[4] = (-2i32) as u32;
++        r.run(0x0285_f530, &mut ctx);
++        assert_eq!(ctx.r[4], 0);
++        ctx.r[4] = 5;
++        r.run(0x0285_f530, &mut ctx);
++        assert_eq!(ctx.r[4], 5);
++        // zenny: a gain x3
++        ctx.r[4] = 100;
++        r.run(0x0219_c720, &mut ctx);
++        assert_eq!(ctx.r[4], 300);
++        // items: used in a quest, not taken out
++        ctx.lr = 0x0285_edac;
++        ctx.r[5] = u32::MAX;
++        r.run(0x0219_aeac, &mut ctx);
++        assert_eq!(ctx.r[5], 0);
++    }
++
++    /// A world with a hunter at 0x2000_0000 that the game's tables say is the one that plays (number 2 of 8).
++    fn world(g: &Guest) -> u32 {
++        let (players, game, hunter) = (0x2100_0000u32, 0x2100_1000u32, 0x2000_0000u32);
++        g.put_u32(0x1031_4b80, players);
++        g.put_u32(0x101f_db9c, game);
++        g.put_u8(game + 0x4b, 2);
++        g.put_u32(players + 0x40 + 4 * 2, hunter);
++        g.put_u32(hunter + 0xc, 2 << 29);
++        hunter
++    }
++
++    #[test]
++    fn invincible_takes_the_damage_and_status_out_of_the_hits_on_the_hunter_that_plays_only() {
++        let list: BTreeMap<u32, String> = [(0x0212_c098, "hunter_hit".to_string())].into();
++        let mut r = Registry::new(&list);
++        assert!(r.on("hunter_hit", invincible(1.0)));
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        let hunter = world(&g);
++        let mut ctx = crate::game::new_ctx(memory.as_mut_ptr());
++        let record = 0x2200_0000u32;
++        g.put_u32(record + BASE_DAMAGE, 40.0f32.to_bits());
++        g.put_u32(record + STATUS_AMOUNT, 25.0f32.to_bits());
++        ctx.r[4] = hunter;
++        ctx.r[5] = record;
++        r.run(0x0212_c098, &mut ctx);
++        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 0.0);
++        assert_eq!(f32::from_bits(g.u32(record + STATUS_AMOUNT)), 0.0);
++        // another player's hunter (a guest's own game works its hits out): left as it is
++        g.put_u32(record + BASE_DAMAGE, 40.0f32.to_bits());
++        ctx.r[4] = 0x2300_0000;
++        r.run(0x0212_c098, &mut ctx);
++        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 40.0);
++        // and with no player table to look at, nothing is touched either
++        g.put_u32(0x1031_4b80, 0);
++        ctx.r[4] = hunter;
++        r.run(0x0212_c098, &mut ctx);
++        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 40.0);
++    }
++}
+diff --git a/crates/mh3u-rt/src/combat.rs b/crates/mh3u-rt/src/combat.rs
+new file mode 100644
+index 0000000..70d17ab
+--- /dev/null
++++ b/crates/mh3u-rt/src/combat.rs
+@@ -0,0 +1,381 @@
++//! Read-only combat information for the overlay: the life of the monsters of a quest and what the hunter has done to them.
++//!
++//! The monsters are found when the game sets their life at spawn (the hook `monster_init`, `uEnemy::initMaxHp` 0x0259fc98, r3 = the
++//! monster). Their state is `*(monster + 0x1be0)` (the game's own table of debug properties names the fields, see `docs/ghidra.md`):
++//! `+0x8b8` is the life now and `+0x8bc` the most it has (`hp_vital` and `max_hp_vital`, 32-bit), `+2` its id (`em_id`).
++//!
++//! At each frame swap (`mods::on_frame`, with the baton) the monsters are read: what a monster's life went down by is damage dealt;
++//! it counts as the hunter's own when one of the hunter's hits was resolved a moment before (`hit_resolve` marks them). Nothing is
++//! written to the game. The overlay draws what [`snapshot`] gives.
++
++use crate::guest::Guest;
++use crate::hooks::{Callback, Hook};
++use std::collections::VecDeque;
++use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
++use std::sync::{Arc, Mutex};
++
++/// `sPlayer`'s and `sGame`'s instance pointers; the players table is at `sPlayer + 0x40` (8 pointers) and the local player's number
++/// at `sGame + 0x4b`.
++const PLAYER_SINGLETON: u32 = 0x1031_4b80;
++const GAME_SINGLETON: u32 = 0x101f_db9c;
++/// Where the hunter's own state is in a hunter (`hunter + 0xe30`) is not needed here; the monster's state is.
++const MONSTER_STATE: u32 = 0x1be0;
++const HP_NOW: u32 = 0x8b8;
++const HP_MAX: u32 = 0x8bc;
++const EM_ID: u32 = 2;
++
++/// The most monsters followed at once.
++const MOST_MONSTERS: usize = 24;
++/// Frames after one of the hunter's hits in which a fall of a monster's life is counted as the hunter's.
++const OWN_FRAMES: u64 = 3;
++/// The seconds the DPS looks back over.
++const WINDOW_SECS: f32 = 5.0;
++
++static LIFE_ON: AtomicBool = AtomicBool::new(false);
++static METER_ON: AtomicBool = AtomicBool::new(false);
++/// The frame (`crate::FRAMES`) of the last hit of the hunter's own.
++static OWN_HIT: AtomicU64 = AtomicU64::new(0);
++
++/// The life bars are on (the cheat `monsterhp`).
++pub fn enable_life() {
++    LIFE_ON.store(true, Relaxed);
++}
++
++/// The damage meter is on (the cheat `dmgmeter`).
++pub fn enable_meter() {
++    METER_ON.store(true, Relaxed);
++}
++
++/// Whether anything of this is on (the overlay draws only then).
++pub fn enabled() -> bool {
++    LIFE_ON.load(Relaxed) || METER_ON.load(Relaxed) || cfg!(test) && ENABLED_FOR_TEST.load(Relaxed)
++}
++
++/// Lets the tests turn the counters on without the cheats.
++#[allow(dead_code)]
++static ENABLED_FOR_TEST: AtomicBool = AtomicBool::new(false);
++
++/// One monster as of the last frame.
++#[derive(Clone, Debug, PartialEq)]
++pub struct Monster {
++    pub address: u32,
++    /// The game's number for the kind of monster (`em_id`).
++    pub id: u8,
++    pub hp: i32,
++    pub max: i32,
++}
++
++/// What the overlay draws.
++#[derive(Clone, Debug, Default, PartialEq)]
++pub struct Snapshot {
++    pub monsters: Vec<Monster>,
++    /// Damage the monsters' life went down by since the counters began: all of it, and the part after the hunter's own hits.
++    pub dealt: i64,
++    pub dealt_own: i64,
++    /// Damage a second over the last [`WINDOW_SECS`] seconds (the hunter's own), and the mean since the first hit.
++    pub dps: f32,
++    pub dps_mean: f32,
++    pub life_on: bool,
++    pub meter_on: bool,
++}
++
++struct State {
++    /// The monsters, with the life each had at the last frame (-1: not read yet).
++    monsters: Vec<(u32, i32)>,
++    /// (seconds since the start, damage, the hunter's own) of each fall of life, newest last.
++    falls: VecDeque<(f32, i32, bool)>,
++    dealt: i64,
++    dealt_own: i64,
++    first_hit: Option<f32>,
++    last_hit: f32,
++    started: std::time::Instant,
++    snapshot: Arc<Snapshot>,
++}
++
++static STATE: Mutex<Option<State>> = Mutex::new(None);
++
++fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
++    let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
++    f(s.get_or_insert_with(|| State {
++        monsters: Vec::new(),
++        falls: VecDeque::new(),
++        dealt: 0,
++        dealt_own: 0,
++        first_hit: None,
++        last_hit: 0.0,
++        started: std::time::Instant::now(),
++        snapshot: Arc::new(Snapshot::default()),
++    }))
++}
++
++/// A monster began to exist: it is followed from now on. The counters start again when no monster was left.
++pub fn add_monster(address: u32) {
++    with_state(|s| {
++        if s.monsters.iter().any(|m| m.0 == address) {
++            return;
++        }
++        if s.monsters.is_empty() {
++            s.falls.clear();
++            s.dealt = 0;
++            s.dealt_own = 0;
++            s.first_hit = None;
++        }
++        if s.monsters.len() >= MOST_MONSTERS {
++            s.monsters.remove(0);
++        }
++        s.monsters.push((address, -1));
++    });
++}
++
++/// Starts the counters again (what the overlay's button does).
++pub fn reset() {
++    with_state(|s| {
++        s.falls.clear();
++        s.dealt = 0;
++        s.dealt_own = 0;
++        s.first_hit = None;
++    });
++}
++
++/// What the overlay shows now.
++pub fn snapshot() -> Arc<Snapshot> {
++    with_state(|s| s.snapshot.clone())
++}
++
++/// The hunter that plays here (the game's player table, entry `sGame + 0x4b`), or 0.
++pub fn local_hunter(g: &Guest) -> u32 {
++    let (players, game) = (g.u32(PLAYER_SINGLETON), g.u32(GAME_SINGLETON));
++    if players == 0 || game == 0 {
++        return 0;
++    }
++    let number = g.u8(game + 0x4b);
++    if number >= 8 {
++        return 0;
++    }
++    let hunter = g.u32(players + 0x40 + 4 * u32::from(number));
++    // the game checks the same top bits of the object's flags before it trusts an entry
++    if hunter != 0 && matches!(g.u32(hunter + 0xc) >> 29, 1 | 2) { hunter } else { 0 }
++}
++
++/// Whether the address can hold a monster the game made.
++fn plausible(address: u32) -> bool {
++    (0x1000_0000..0x5000_0000).contains(&address) && address.is_multiple_of(4)
++}
++
++/// The life of the monster at `address` as (id, now, most), or none if it is not a monster that exists.
++pub fn read_monster(g: &Guest, address: u32) -> Option<(u8, i32, i32)> {
++    if !plausible(address) || !matches!(g.u32(address + 0xc) >> 29, 1 | 2) {
++        return None;
++    }
++    let state = g.u32(address + MONSTER_STATE);
++    if !plausible(state) {
++        return None;
++    }
++    let (now, max) = (g.u32(state + HP_NOW) as i32, g.u32(state + HP_MAX) as i32);
++    (max > 0 && max <= 5_000_000 && (0..=max).contains(&now)).then(|| (g.u8(state + EM_ID), now, max))
++}
++
++/// At each frame swap: reads the monsters and counts what their life went down by. Does nothing when nothing of this is on.
++pub(crate) fn on_frame(g: &Guest) {
++    if !enabled() {
++        return;
++    }
++    let frame = crate::FRAMES.load(Relaxed);
++    let own = frame.wrapping_sub(OWN_HIT.load(Relaxed)) <= OWN_FRAMES;
++    with_state(|s| {
++        let now_s = s.started.elapsed().as_secs_f32();
++        let mut list = Vec::with_capacity(s.monsters.len());
++        let mut kept = Vec::with_capacity(s.monsters.len());
++        for &(address, before) in &s.monsters {
++            let Some((id, hp, max)) = read_monster(g, address) else {
++                // gone (or not ready yet): dropped once it has been seen to exist, kept while it has not been read at all
++                if before >= 0 {
++                    continue;
++                }
++                kept.push((address, before));
++                continue;
++            };
++            if before > hp {
++                let fall = before - hp;
++                s.dealt += i64::from(fall);
++                if own {
++                    s.dealt_own += i64::from(fall);
++                }
++                s.falls.push_back((now_s, fall, own));
++                s.first_hit.get_or_insert(now_s);
++                s.last_hit = now_s;
++            }
++            kept.push((address, hp));
++            list.push(Monster { address, id, hp, max });
++        }
++        s.monsters = kept;
++        while s.falls.front().is_some_and(|f| now_s - f.0 > 60.0) {
++            s.falls.pop_front();
++        }
++        let in_window: i64 = s.falls.iter().filter(|f| f.2 && now_s - f.0 <= WINDOW_SECS).map(|f| i64::from(f.1)).sum();
++        let mean = s.first_hit.map_or(0.0, |t| {
++            // the time from the first hit to the last, at least a second so a single hit does not give a huge number
++            s.dealt_own as f32 / (s.last_hit - t).max(1.0)
++        });
++        s.snapshot = Arc::new(Snapshot {
++            monsters: list,
++            dealt: s.dealt,
++            dealt_own: s.dealt_own,
++            dps: in_window as f32 / WINDOW_SECS,
++            dps_mean: mean,
++            life_on: LIFE_ON.load(Relaxed),
++            meter_on: METER_ON.load(Relaxed),
++        });
++    });
++}
++
++/// The callback of `monster_init`: r3 is the monster.
++pub fn monster_init() -> Callback {
++    Box::new(|h: &mut Hook| {
++        let monster = h.ctx.r[3];
++        if plausible(monster) {
++            add_monster(monster);
++            if h.calls < 12 {
++                eprintln!("[combat] monster {monster:#x} appeared (call {})", h.calls + 1);
++            }
++        }
++    })
++}
++
++/// Whether the hit record `record` was made by the hunter at `hunter` (its own hit, or an object it made).
++pub fn own_hit(g: &Guest, record: u32, hunter: u32) -> bool {
++    if hunter == 0 || record == 0 {
++        return false;
++    }
++    match g.u8(record + 6) {
++        0 => g.u32(record + 0x10) == hunter,
++        // an object (a shell, a bomb): its maker's class is in +7 and the owner in +0x14
++        2 => g.u8(record + 7) == 0 && g.u32(record + 0x14) == hunter,
++        _ => false,
++    }
++}
++
++/// The callback of `hit_resolve` for the meter: marks the frame of each of the hunter's own hits.
++pub fn mark_own_hits() -> Callback {
++    Box::new(|h: &mut Hook| {
++        let record = h.ctx.r[5];
++        let g = Guest::new(h.ctx.mem);
++        if own_hit(&g, record, local_hunter(&g)) {
++            OWN_HIT.store(crate::FRAMES.load(Relaxed), Relaxed);
++        }
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// The tests share the one state, so they take turns.
++    static TURN: Mutex<()> = Mutex::new(());
++
++    /// A monster at 0x2000_0000 whose state (0x2000_1000) holds a life of `hp` out of `max`, in a guest memory of its own.
++    fn put_monster(g: &Guest, hp: i32, max: i32) {
++        let (monster, state) = (0x2000_0000u32, 0x2000_1000u32);
++        g.put_u32(monster + 0xc, 1 << 29);
++        g.put_u32(monster + MONSTER_STATE, state);
++        g.put_u32(state + HP_NOW, hp as u32);
++        g.put_u32(state + HP_MAX, max as u32);
++        g.put_u8(state + EM_ID, 25);
++    }
++
++    #[test]
++    fn a_monsters_life_is_read_through_its_state() {
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        assert_eq!(read_monster(&g, 0x2000_0000), None, "nothing there");
++        put_monster(&g, 1800, 2000);
++        assert_eq!(read_monster(&g, 0x2000_0000), Some((25, 1800, 2000)));
++        // a life above the most, or the -1 the game puts in at a reset, is not a life
++        put_monster(&g, 2500, 2000);
++        assert_eq!(read_monster(&g, 0x2000_0000), None);
++        put_monster(&g, -1, 2000);
++        assert_eq!(read_monster(&g, 0x2000_0000), None);
++        // a monster that is gone (its flags' top bits are not alive) is not read
++        put_monster(&g, 10, 2000);
++        g.put_u32(0x2000_0000 + 0xc, 0);
++        assert_eq!(read_monster(&g, 0x2000_0000), None);
++        assert!(!plausible(0x0000_1000), "code and low memory are not monsters");
++        assert!(!plausible(0x2000_0002), "not aligned");
++    }
++
++    #[test]
++    fn what_a_monsters_life_goes_down_by_is_damage_and_the_hunters_own_after_its_hits() {
++        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        ENABLED_FOR_TEST.store(true, Relaxed);
++        reset();
++        with_state(|s| s.monsters.clear());
++        put_monster(&g, 2000, 2000);
++        add_monster(0x2000_0000);
++        on_frame(&g);
++        assert_eq!(snapshot().monsters, vec![Monster { address: 0x2000_0000, id: 25, hp: 2000, max: 2000 }]);
++        // the life falls with a hit of the hunter's own a moment before
++        OWN_HIT.store(crate::FRAMES.load(Relaxed), Relaxed);
++        put_monster(&g, 1700, 2000);
++        on_frame(&g);
++        let s = snapshot();
++        assert_eq!((s.dealt, s.dealt_own), (300, 300));
++        assert!(s.dps > 0.0 && s.dps_mean > 0.0);
++        // a fall long after it is not the hunter's
++        OWN_HIT.store(crate::FRAMES.load(Relaxed).wrapping_sub(100), Relaxed);
++        put_monster(&g, 1600, 2000);
++        on_frame(&g);
++        let s = snapshot();
++        assert_eq!((s.dealt, s.dealt_own), (400, 300));
++        // a healed monster is not damage
++        put_monster(&g, 1900, 2000);
++        on_frame(&g);
++        assert_eq!(snapshot().dealt, 400);
++        reset();
++        with_state(|s| s.monsters.clear());
++        ENABLED_FOR_TEST.store(false, Relaxed);
++    }
++
++    #[test]
++    fn the_hunters_own_hits_are_told_from_the_others() {
++        let mut m = vec![0u8; 0x400];
++        let g = Guest::new(m.as_mut_ptr());
++        let (record, hunter) = (0x100u32, 0x2000u32);
++        g.put_u8(record + 6, 0);
++        g.put_u32(record + 0x10, hunter);
++        assert!(own_hit(&g, record, hunter));
++        assert!(!own_hit(&g, record, 0x3000), "another hunter's hit");
++        // an object the hunter made
++        g.put_u8(record + 6, 2);
++        g.put_u8(record + 7, 0);
++        g.put_u32(record + 0x14, hunter);
++        assert!(own_hit(&g, record, hunter));
++        g.put_u8(record + 7, 1);
++        assert!(!own_hit(&g, record, hunter), "an object a monster made");
++        // a monster's hit
++        g.put_u8(record + 6, 1);
++        assert!(!own_hit(&g, record, hunter));
++        assert!(!own_hit(&g, record, 0), "no hunter, no own hit");
++    }
++
++    #[test]
++    fn counters_start_again_with_the_first_monster_after_none_were_left() {
++        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
++        reset();
++        add_monster(0x2000_0000);
++        with_state(|s| {
++            s.dealt = 500;
++            s.monsters.clear();
++        });
++        add_monster(0x2000_4000);
++        with_state(|s| {
++            assert_eq!(s.dealt, 0, "a new quest starts from zero");
++            assert_eq!(s.monsters.len(), 1);
++        });
++        // the same monster twice is followed once
++        add_monster(0x2000_4000);
++        with_state(|s| assert_eq!(s.monsters.len(), 1));
++        with_state(|s| s.monsters.clear());
++    }
++}
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index b5a3468..63986f3 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -17,6 +17,8 @@ pub mod hooks;
+ pub fn new_test_ctx() -> Ctx {
+     game::new_ctx(std::ptr::null_mut())
+ }
++pub mod cheats;
++pub mod combat;
+ pub mod input;
+ mod kernel;
+ mod memory;
+diff --git a/crates/mh3u-rt/src/mods.rs b/crates/mh3u-rt/src/mods.rs
+index 246ddc0..b245098 100644
+--- a/crates/mh3u-rt/src/mods.rs
++++ b/crates/mh3u-rt/src/mods.rs
+@@ -191,6 +191,7 @@ pub fn stop_search() {
+ pub(crate) fn on_frame(g: &Guest) {
+     GUEST_BASE.store(g.base_addr(), Relaxed);
+     crate::scene::on_frame(g);
++    crate::combat::on_frame(g);
+     if !ACTIVE.load(Relaxed) {
+         return;
+     }
+diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
+index b9a6aae..3e5d4d3 100644
+--- a/crates/mh3u-tools/src/main.rs
++++ b/crates/mh3u-tools/src/main.rs
+@@ -928,6 +928,8 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
+         // the overlay's events (item gains, money, crafts, quest ends; docs/overlay.md)
+         // opt-in: the wishlist's status in the item menu's last empty slot (MH3U_NATIVE_TEXT=1; docs/native-menu.md)
+         mh3u_rt::native_text::register(&mut registry);
++        // opt-in: the launcher's Cheats section (MH3U_CHEATS; one hit kill, infinite sharpness, invincible, zenny, items)
++        mh3u_rt::cheats::register(&mut registry);
+         // opt-in, read-only: the start menu's state on each change (MH3U_MENU_PROBE=1; docs/native-menu.md)
+         mh3u_rt::menu_probe::register(&mut registry);
+         // opt-in: while the mod key is held, the start menu's Gestures row is a Mods entry (MH3U_NATIVE_MENU=1; docs/native-menu.md)
+@@ -939,6 +941,8 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
+         mh3u_rt::hooks::install(registry);
+     } else {
+         mh3u_rt::menu_probe::no_hooks();
++        // opt-in: the launcher's Cheats section needs hooks (MH3U_CHEATS): says so when the build has none
++        mh3u_rt::cheats::no_hooks_warning();
+     }
+     let text = rpx::section_at(&data, TEXT_ADDRESS)?;
+     let mut content: Vec<PathBuf> = Vec::new();

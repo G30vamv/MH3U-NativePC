@@ -3,7 +3,7 @@
 `mh3u-tools.exe` in the Releases is built from [glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port) (AGPL-3.0) plus the changes in these patches. The patches are under **AGPL-3.0**, like the original project.
 
 - **Base:** commit `41d3a9b` of `glinesbdev/mh3u-port` (26 Oct 2026, *Merge pull request #34*).
-- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007`, `0009` after `0008`, `0010` after `0009`, `0011` after `0010` and `0012` after `0011`.
+- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007`, `0009` after `0008`, `0010` after `0009`, `0011` after `0010`, `0012` after `0011` and `0013` after `0012`.
 
 | Patch | Contents |
 |---|---|
@@ -18,7 +18,8 @@
 | `0009-gpu-queue-thread-by-vendor.patch` | The GPU queue's own thread (from `0001`) is now on by default only on NVIDIA cards: on AMD cards it made the driver hold on to gigabytes of memory in screens with many draws (the item box) until the device was lost, and cards that share the system's memory (Intel's) are kept on the game's thread too. `MH3U_GFX_THREAD=on` or `off` decides for any card (`queue.rs`, `lib.rs`). |
 | `0010-device-lost-closes-the-game.patch` | When the driver takes the graphics device away (a GPU reset or crash) the game shows a message (English or Spanish) and closes, instead of going on with a frozen picture; the log says on which card, in which scene and at which frame (`lost.rs`, `lib.rs`, `error_box` in `mh3u-rt`). `MH3U_DEVICE_LOST_EXIT=off` keeps the old behaviour. |
 | `0011-caches-survive-updates-and-thread-times.patch` | The on-disk caches of translated shaders and pipelines are now named after a hash of the translator's sources only (`build.rs`, `translations.rs`, `docs/translator.md`), so a release that changes just the rest of the graphics code no longer throws them away. Two new lines in the timing report: `[gfx threads]` (the CPU each thread used, `thread_cpu_times` in `mh3u-rt`) and `[gfx gpu]` (how long the GPU takes to finish a frame once the queue has all its work; `perf.rs`, `queue.rs`). |
-| `0012-cheats.patch` | The launcher's Cheats section (opt-in, `MH3U_CHEATS`): One Hit Kill, infinite sharpness, invincible, more zenny and infinite items, each a callback on a hook of `mods/hooks.txt` (`cheats.rs`, with tests). Off unless the player turns it on in the launcher. |
+| `0012-graphics-in-parallel.patch` | The game's graphics work moves off the game's thread: the calls are copied in order (with what each draw reads from the game's memory, copied once) to a thread of its own that works out the draws (`front.rs`, `mirror.rs`), each draw sets only the pass state that changed, the scene is read every 8 frames, and the caches' translator-only key. On by default only on NVIDIA cards (`MH3U_GFX_RESOLVER=thread\|off`). This work-in-progress version still carries the test switches (`MH3U_GFX_ADAPTER`, `MH3U_WINDOW_ACTIVE`, `MH3U_GFX_FRONT_TIMES`, `MH3U_GFX_FRAMES_AHEAD`, `MH3U_GFX_BATCH`), which go before it is published. |
+| `0013-cheats.patch` | The launcher's Cheats section (opt-in, `MH3U_CHEATS`): One Hit Kill, infinite sharpness, invincible (the hits on the hunter), more zenny, infinite items, and two read-only helpers drawn over the game: life bars for the monsters and a damage meter with DPS (`cheats.rs`, `combat.rs`, the overlay; with tests). Off unless the player turns it on in the launcher. |
 
 ## Reproducing the binary
 
@@ -37,7 +38,8 @@ git apply --ignore-whitespace <path>/0008-fix-stale-colour-buffers.patch
 git apply --ignore-whitespace <path>/0009-gpu-queue-thread-by-vendor.patch
 git apply --ignore-whitespace <path>/0010-device-lost-closes-the-game.patch
 git apply --ignore-whitespace <path>/0011-caches-survive-updates-and-thread-times.patch
-git apply --ignore-whitespace <path>/0012-cheats.patch
+git apply --ignore-whitespace <path>/0012-graphics-in-parallel.patch
+git apply --ignore-whitespace <path>/0013-cheats.patch
 cargo build --release -p mh3u-tools
 ```
 
