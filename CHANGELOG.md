@@ -7,6 +7,8 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 ## [Unreleased]
 
 ### Added
+- **Faster graphics on NVIDIA cards.** The game now prepares each frame's drawing on a second thread, so the frame rate goes up by about a quarter in the village and a fifth indoors (tested on an RTX 4070 with Vulkan and DX12). It turns on by itself on NVIDIA cards; other cards keep working as before.
+- **DX12 helper files.** `dxcompiler.dll` and `dxil.dll` now come with the game, so choosing DX12 works without extra downloads.
 - **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (the hits you take do 0 damage and add no status effects), more zenny and infinite items used in a quest. Two read-only helpers join them: **life bars for the monsters** of the quest and a **damage meter** (what the monsters' life goes down by, yours apart, and your DPS), both drawn over the game. A warning tells you that cheats can alter or corrupt your save before you turn them on.
 - The first time you play after updating, the game is built again (the cheats need new hooks).
 

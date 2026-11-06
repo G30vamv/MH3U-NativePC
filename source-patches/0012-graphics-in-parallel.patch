@@ -152,7 +152,7 @@ index fc8b9bd..bb88d78 100644
      key: Option<PassKey>,
 diff --git a/crates/mh3u-gfx/src/front.rs b/crates/mh3u-gfx/src/front.rs
 new file mode 100644
-index 0000000..24c1d71
+index 0000000..c6b4b2d
 --- /dev/null
 +++ b/crates/mh3u-gfx/src/front.rs
 @@ -0,0 +1,854 @@
@@ -361,10 +361,10 @@ index 0000000..24c1d71
 +        targets: std::collections::HashSet::new(),
 +        capture: Duration::ZERO,
 +        frames_reported: 0,
-+        timing: std::env::var_os("MH3U_GFX_FRONT_TIMES").is_some(),
++        timing: false,
 +        tm: Times::default(),
-+        ahead: std::env::var("MH3U_GFX_FRAMES_AHEAD").ok().and_then(|v| v.trim().parse().ok()).map_or(FRAMES_AHEAD, |n: u32| n.clamp(1, 8)),
-+        batch_size: std::env::var("MH3U_GFX_BATCH").ok().and_then(|v| v.trim().parse().ok()).map_or(BATCH, |n: usize| n.clamp(1, 8192)),
++        ahead: FRAMES_AHEAD,
++        batch_size: BATCH,
 +    })
 +}
 +
@@ -1502,7 +1502,7 @@ index a7c8af7..c241763 100644
          } else {
              self.diag.draw();
 diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
-index 9e0773f..e4d0333 100644
+index 9e0773f..f25c1de 100644
 --- a/crates/mh3u-gfx/src/lib.rs
 +++ b/crates/mh3u-gfx/src/lib.rs
 @@ -8,6 +8,7 @@ pub mod events;
@@ -1531,48 +1531,6 @@ index 9e0773f..e4d0333 100644
  pub use gx2::Gx2;
  
  /// The commit this build was made from ("+changes" when the working tree differed), printed at start and written into frame dumps.
-@@ -76,13 +80,23 @@ impl Display {
-             ..wgpu::InstanceDescriptor::new_without_display_handle()
-         });
-         let surface = instance.create_surface(window.clone()).context("creating the window's surface")?;
--        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
--            power_preference: wgpu::PowerPreference::HighPerformance,
--            compatible_surface: Some(&surface),
--            force_fallback_adapter: false,
--            ..Default::default()
--        }))
--        .context("no graphics adapter")?;
-+        // MH3U_GFX_ADAPTER=<part of a name> picks that graphics card (to try a second one in the same PC)
-+        let wanted = std::env::var("MH3U_GFX_ADAPTER").ok().map(|n| n.to_ascii_lowercase()).filter(|n| !n.trim().is_empty());
-+        let chosen = wanted.as_deref().and_then(|name| {
-+            pollster::block_on(instance.enumerate_adapters(backends))
-+                .into_iter()
-+                .find(|a| a.get_info().name.to_ascii_lowercase().contains(name.trim()) && a.is_surface_supported(&surface))
-+        });
-+        let adapter = match chosen {
-+            Some(adapter) => adapter,
-+            None => pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-+                power_preference: wgpu::PowerPreference::HighPerformance,
-+                compatible_surface: Some(&surface),
-+                force_fallback_adapter: false,
-+                ..Default::default()
-+            }))
-+            .context("no graphics adapter")?,
-+        };
-         let info = adapter.get_info();
-         eprintln!("[gfx] adapter: {} ({:?}, {:?}), driver {} {}", info.name, info.backend, info.device_type, info.driver, info.driver_info);
-         let features = adapter.features();
-@@ -339,7 +353,9 @@ impl<F: FnOnce(Display) + Send + 'static> ApplicationHandler for App<F> {
-         let attributes = Window::default_attributes()
-             .with_title("Monster Hunter 3 Ultimate")
-             .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
--            .with_fullscreen(borderless(self.fullscreen));
-+            .with_fullscreen(borderless(self.fullscreen))
-+            // MH3U_WINDOW_ACTIVE=off opens the window without taking the focus (to run a second copy beside another game)
-+            .with_active(!std::env::var("MH3U_WINDOW_ACTIVE").is_ok_and(|v| v.eq_ignore_ascii_case("off")));
-         self.size = (1280.0, 720.0);
-         let attributes = icon::apply(attributes);
-         let made = event_loop
 diff --git a/crates/mh3u-gfx/src/mirror.rs b/crates/mh3u-gfx/src/mirror.rs
 new file mode 100644
 index 0000000..a8415e5

@@ -1,5 +1,141 @@
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index f25c1de..6010faf 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -17,6 +17,7 @@ pub mod overlay;
+ mod perf;
+ mod pipelines;
+ mod mirror;
++mod monster_names;
+ mod queue;
+ mod reads;
+ mod report;
+diff --git a/crates/mh3u-gfx/src/monster_names.rs b/crates/mh3u-gfx/src/monster_names.rs
+new file mode 100644
+index 0000000..ecf00d6
+--- /dev/null
++++ b/crates/mh3u-gfx/src/monster_names.rs
+@@ -0,0 +1,118 @@
++//! The game's names for its monsters, by the id the game gives each kind (`em_id`: the number in `emNNN.arc`, which is also the
++//! index in the game's own `Monster` text table), in English and in Spanish. An empty name is an id the game gives no name.
++
++const NAMES: [(&str, &str); 86] = [
++    ("", ""),
++    ("Rathian", "Rathian"),
++    ("Rathalos", "Rathalos"),
++    ("Qurupeco", "Qurupeco"),
++    ("Gigginox", "Gigginox"),
++    ("Barioth", "Barioth"),
++    ("Diablos", "Diablos"),
++    ("Deviljho", "Deviljho"),
++    ("Barroth", "Barroth"),
++    ("Uragaan", "Uragaan"),
++    ("Jaggi", "Jaggi"),
++    ("Jaggia", "Jaggia"),
++    ("Great Jaggi", "Gran Jaggi"),
++    ("Baggi", "Baggi"),
++    ("Great Baggi", "Gran Baggi"),
++    ("Lagiacrus", "Lagiacrus"),
++    ("Royal Ludroth", "Ludroth real"),
++    ("Ludroth", "Ludroth"),
++    ("Gobul", "Gobul"),
++    ("Agnaktor", "Agnaktor"),
++    ("Ceadeus", "Ceadeus"),
++    ("Uroktor", "Uroktor"),
++    ("Delex", "Delex"),
++    ("Epioth", "Epioth"),
++    ("Alatreon", "Alatreon"),
++    ("Jhen Mohran", "Jhen Mohran"),
++    ("Giggi", "Giggi"),
++    ("Aptonoth", "Aptonoth"),
++    ("Popo", "Popo"),
++    ("Rhenoplos", "Rhenoplos"),
++    ("Felyne", "Felyne"),
++    ("Melynx", "Melynx"),
++    ("Fish", "Pescado"),
++    ("Altaroth", "Altaroth"),
++    ("Kelbi", "Kelbi"),
++    ("Giggi Sac", "Giggi bolsón"),
++    ("Bnahabra", "Bnahabra"),
++    ("Bnahabra", "Bnahabra"),
++    ("Bnahabra", "Bnahabra"),
++    ("Bnahabra", "Bnahabra"),
++    ("Rock", "Roca"),
++    ("Zinogre", "Zinogre"),
++    ("Arzuros", "Arzuros"),
++    ("Lagombi", "Lagombi"),
++    ("Volvidon", "Volvidon"),
++    ("Great Wroggi", "Wroggi magnificente"),
++    ("Duramboros", "Duramboros"),
++    ("Nibelsnarf", "Nibelsnarf"),
++    ("Wroggi", "Wroggi"),
++    ("Slagtoth", "Slagtoth"),
++    ("Gargwa", "Gargwa"),
++    ("Crimson Qurupeco", "Qurupeco carmesí"),
++    ("Baleful Gigginox", "Gigginox aterrador"),
++    ("Sand Barioth", "Barioth arenoso"),
++    ("Jade Barroth", "Barroth esmeralda"),
++    ("Steel Uragaan", "Uragaan acerado"),
++    ("Purple Ludroth", "Ludroth purpúreo"),
++    ("Glacial Agnaktor", "Agnaktor glacial"),
++    ("Black Diablos", "Diablos negra"),
++    ("Nargacuga", "Nargacuga"),
++    ("Green Nargacuga", "Nargacuga verdoso"),
++    ("Lucent Nargacuga", "Nargacuga lunar"),
++    ("Pink Rathian", "Rathian rosa"),
++    ("Gold Rathian", "Rathian dorada"),
++    ("Azure Rathalos", "Rathalos celeste"),
++    ("Silver Rathalos", "Rathalos plateado"),
++    ("Plesioth", "Plesioth"),
++    ("Green Plesioth", "Plesioth verde"),
++    ("Ivory Lagiacrus", "Lagiacrus marmóreo"),
++    ("Abyssal Lagiacrus", "Lagiacrus del abismo"),
++    ("Goldbeard Ceadeus", "Ceadeus barba dorada"),
++    ("Deviljho", "Deviljho"),
++    ("Stygian Zinogre", "Zinogre estigio"),
++    ("Rust Duramboros", "Duramboros herrumbroso"),
++    ("Brachydios", "Brachydios"),
++    ("Dire Miralis", "Miralis funesto"),
++    ("Bullfango", "Bullfango"),
++    ("Anteka", "Anteka"),
++    ("Slagtoth", "Slagtoth"),
++    ("Rock", "Roca"),
++    ("Rock", "Roca"),
++    ("Rock", "Roca"),
++    ("Rock", "Roca"),
++    ("Rock", "Roca"),
++    ("Rock", "Roca"),
++    ("Hallowed Jhen Mohran", "Jhen Mohran sagrado"),
++];
++
++/// The name of the monster with this id in the language asked for (`spanish`), or "Monster NNN" / "Monstruo NNN" when the game has none.
++pub fn name(id: u8, spanish: bool) -> String {
++    match NAMES.get(id as usize) {
++        Some(&(en, es)) if !en.is_empty() => (if spanish { es } else { en }).to_string(),
++        _ => format!("{} {:03}", if spanish { "Monstruo" } else { "Monster" }, id),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::name;
++
++    #[test]
++    fn known_ids_have_their_names_in_both_languages() {
++        assert_eq!(name(2, false), "Rathalos");
++        assert_eq!(name(12, false), "Great Jaggi");
++        assert_eq!(name(12, true), "Gran Jaggi");
++        assert_eq!(name(74, false), "Brachydios");
++    }
++
++    #[test]
++    fn unknown_ids_keep_a_number() {
++        assert_eq!(name(0, true), "Monstruo 000");
++        assert_eq!(name(200, false), "Monster 200");
++    }
++}
 diff --git a/crates/mh3u-gfx/src/overlay.rs b/crates/mh3u-gfx/src/overlay.rs
-index 8317b0f..5fe1644 100644
+index 8317b0f..fecdf27 100644
 --- a/crates/mh3u-gfx/src/overlay.rs
 +++ b/crates/mh3u-gfx/src/overlay.rs
 @@ -317,7 +317,7 @@ impl Overlay {
@@ -11,7 +147,7 @@ index 8317b0f..5fe1644 100644
              // nothing to draw: the window's size and scale are kept, its events are not wanted
              let pending = INPUT.lock().unwrap_or_else(|e| e.into_inner()).take();
              next_input(pending, &mut self.last_input);
-@@ -679,6 +679,83 @@ impl Overlay {
+@@ -679,6 +679,82 @@ impl Overlay {
          }
      }
  
@@ -48,9 +184,8 @@ index 8317b0f..5fe1644 100644
 +                                };
 +                                ui.label(
 +                                    egui::RichText::new(format!(
-+                                        "{} {:03}   {} / {}  ({:.0} %)",
-+                                        l.p("Monster", "Monstruo"),
-+                                        m.id,
++                                        "{}   {} / {}  ({:.0} %)",
++                                        crate::monster_names::name(m.id, l == crate::settings::Lang::Es),
 +                                        m.hp,
 +                                        m.max,
 +                                        fraction * 100.0
@@ -95,7 +230,7 @@ index 8317b0f..5fe1644 100644
      fn ui(&mut self, ctx: &egui::Context) {
          let l = self.live.lang;
          if self.fps_enabled {
-@@ -710,6 +787,7 @@ impl Overlay {
+@@ -710,6 +786,7 @@ impl Overlay {
                          });
                  });
          }
@@ -105,7 +240,7 @@ index 8317b0f..5fe1644 100644
                  .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0 + 40.0 * k as f32))
 diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
 new file mode 100644
-index 0000000..4cae926
+index 0000000..7993214
 --- /dev/null
 +++ b/crates/mh3u-rt/src/cheats.rs
 @@ -0,0 +1,555 @@
@@ -291,9 +426,9 @@ index 0000000..4cae926
 +    })
 +}
 +
-+/// What the hunter's hit resolver gets (`hunter_hit` is `f_0212c098(hit check, hunter, hit record, ..)`, the counterpart of
-+/// `hit_resolve` for a hunter that is hit: it adds the damage to the hunter's state, `+0xfc` of `*(hunter + 0xe30)`, and the status
-+/// effects after it). With the record's base damage and status amount at 0, a hit does nothing more than push.
++/// What the hunter's hit resolver gets (`hunter_hit` is `f_021283ec(hit check, hunter, hit record, ..)`, the counterpart of
++/// `hit_resolve` for a hunter that is hit: it works out the damage from the record's base damage `+0x44` and the status
++/// effects from `+0x54`; `f_0212c098` is its twin for the felyne companions, which is what this hook watched before). With the record's base damage and status amount at 0, a hit does nothing more than push.
 +const STATUS_AMOUNT: u32 = 0x54;
 +
 +fn invincible(_: f32) -> Callback {
@@ -576,7 +711,7 @@ index 0000000..4cae926
 +    fn each_cheat_changes_what_it_should_on_its_hook() {
 +        let list: BTreeMap<u32, String> = [
 +            (0x0212_9ef4, "hit_resolve".to_string()),
-+            (0x0212_c098, "hunter_hit".to_string()),
++            (0x0212_83ec, "hunter_hit".to_string()),
 +            (0x0259_fc98, "monster_init".to_string()),
 +            (0x0285_f530, "sharp_change".to_string()),
 +            (0x0219_c720, "money_add".to_string()),
@@ -637,7 +772,7 @@ index 0000000..4cae926
 +
 +    #[test]
 +    fn invincible_takes_the_damage_and_status_out_of_the_hits_on_the_hunter_that_plays_only() {
-+        let list: BTreeMap<u32, String> = [(0x0212_c098, "hunter_hit".to_string())].into();
++        let list: BTreeMap<u32, String> = [(0x0212_83ec, "hunter_hit".to_string())].into();
 +        let mut r = Registry::new(&list);
 +        assert!(r.on("hunter_hit", invincible(1.0)));
 +        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
@@ -649,18 +784,18 @@ index 0000000..4cae926
 +        g.put_u32(record + STATUS_AMOUNT, 25.0f32.to_bits());
 +        ctx.r[4] = hunter;
 +        ctx.r[5] = record;
-+        r.run(0x0212_c098, &mut ctx);
++        r.run(0x0212_83ec, &mut ctx);
 +        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 0.0);
 +        assert_eq!(f32::from_bits(g.u32(record + STATUS_AMOUNT)), 0.0);
 +        // another player's hunter (a guest's own game works its hits out): left as it is
 +        g.put_u32(record + BASE_DAMAGE, 40.0f32.to_bits());
 +        ctx.r[4] = 0x2300_0000;
-+        r.run(0x0212_c098, &mut ctx);
++        r.run(0x0212_83ec, &mut ctx);
 +        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 40.0);
 +        // and with no player table to look at, nothing is touched either
 +        g.put_u32(0x1031_4b80, 0);
 +        ctx.r[4] = hunter;
-+        r.run(0x0212_c098, &mut ctx);
++        r.run(0x0212_83ec, &mut ctx);
 +        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 40.0);
 +    }
 +}
