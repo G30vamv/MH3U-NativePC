@@ -1,4 +1,6 @@
-# MH3U NativePC
+<p align="center">
+  <img src="docs/images/mh3u-nativepc-banner.svg" alt="MH3U NativePC" width="760">
+</p>
 
 **An unofficial, enhanced build of the native PC port of *Monster Hunter 3 Ultimate*:** faster graphics, working online rooms, controller support and a launcher that sets everything up and keeps itself updated.
 
@@ -105,6 +107,7 @@ docs/            Release guide
 - **Server and online network logic:** [Matt-Wood-23/mh3u-revival](https://github.com/Matt-Wood-23/mh3u-revival) (AGPL-3.0).
 - Upscaling: [AMD FidelityFX Super Resolution 1.0](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT).
 - Portable Clang: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
+- **Artwork:** the logo and emblem were drawn by g30wolff99 for this project. They are inspired by the look of the logo of [Yakumo](https://github.com/TeamGDB/Yakumo), TeamGDB's native port of *Monster Hunter Portable 3rd*, which he liked so much that he wanted to give MH3U NativePC a crest of its own. Thank you, TeamGDB, for the spark.
 
 ## License
 

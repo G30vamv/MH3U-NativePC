@@ -6,6 +6,9 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 
 ## [Unreleased]
 
+### Added
+- **A logo for MH3U NativePC.** A new emblem (a great sword planted in a rock, with the moon and a volcano behind it) is now the icon of `MH3U.exe` and of its window.
+
 ### Changed
 - **The program is now called MH3U NativePC.** The window title, the header, the footer, the file properties of `MH3U.exe` and the Discord status say so, and the project page on GitHub moved to `G30vamv/MH3U-NativePC` (the old address keeps working). Nothing changes in how it plays or updates.
 
