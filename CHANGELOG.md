@@ -4,10 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
 
-## [Unreleased]
+## [0.9.12] - 2026-11-06
+
+### Added
+- **Faster graphics on NVIDIA and AMD cards.** The game now prepares each frame's drawing on a second thread, so the frame rate goes up by about a quarter in the village and a fifth indoors (measured on an RTX 4070 and on the Radeon inside a Ryzen) and it is smoother, with fewer hiccups. It is on by default (*Automatic*); Intel graphics stay as before until they can be tried. It uses roughly 1 GB more memory.
+
+### Fixed
+- **No more freezing when opening the item box or the equipment screens on AMD cards.** On a Radeon RX 6600 the picture could freeze or the game closed with a "graphics card stopped" message after opening the box and choosing "Change equipment", especially with decorations and jewels. It is fixed, at 1x and with 2x + FSR.
+- **The graphics thread no longer eats memory on AMD cards.** The thread that had to be switched off on AMD (it made the card hold on to gigabytes of memory in those same screens) now works fine.
 
 ### Changed
-- **One setting for the graphics threads.** "GPU queue on its own thread" in Graphics is now **"Graphics in parallel (more FPS)"** with two choices: *Automatic* (recommended) and *Off*. It covers both threads the game uses for graphics. Automatic turns them on by itself only on NVIDIA cards; *Off* is for anyone who sees flickering or freezes. If you had the old setting on "Always on" the game keeps using it, but the window no longer offers it.
+- **One setting for the graphics threads.** "GPU queue on its own thread" in Graphics is now **"Graphics in parallel (more FPS)"** with two choices: *Automatic* (recommended) and *Off*. Try *Off* if you see flickering or things that disappear.
 
 ## [0.9.11] - 2026-11-03
 

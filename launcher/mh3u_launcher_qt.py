@@ -570,8 +570,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.opt_gpu_thread.set({"on": "Siempre activado", "off": "Apagado"}.get(parallel, "Automático (recomendado)"))
         self.opt_gpu_thread.setToolTip(
             "Reparte el trabajo gráfico entre varios núcleos del procesador para subir los FPS, sobre todo en procesadores lentos.\n"
-            "Automático: se activa solo con tarjetas NVIDIA y se apaga con AMD e Intel, donde podía congelar la imagen\n"
-            "(por ejemplo al abrir la caja de objetos).\n"
+            "Automático: se activa solo con tarjetas NVIDIA y AMD; con Intel se queda apagado (aún sin probar).\n"
             "Apagado: úsalo si ves parpadeos o cosas que desaparecen, o si el juego se congela."
         )
         g.addWidget(self.opt_gpu_thread)

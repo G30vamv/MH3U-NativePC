@@ -34,7 +34,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.11"
+APP_VERSION = "v0.9.12"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -1856,7 +1856,7 @@ class LauncherLogic:
         # Present Mode (VSync / Mailbox)
         env["MH3U_PRESENT_MODE"] = self.config.get("present_mode", "mailbox")
 
-        # GPU queue on its own thread (faster, but it froze the picture on an AMD card): off hands the work back to the game's thread
+        # Graphics in parallel (faster; on by default on NVIDIA and AMD cards): off hands the work back to the game's thread
         env.update(gpu_thread_env(self.config))
 
         # Upscaler & Sharpness (AMD FidelityFX FSR 1.0 / CAS)

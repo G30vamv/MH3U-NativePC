@@ -1,0 +1,2182 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 1a1f9a1..f2035ed 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1307,6 +1307,7 @@ dependencies = [
+  "mh3u-latte",
+  "mh3u-mods",
+  "mh3u-rt",
++ "naga",
+  "pollster",
+  "serde",
+  "serde_json",
+diff --git a/crates/mh3u-gfx/src/draw.rs b/crates/mh3u-gfx/src/draw.rs
+index fc8b9bd..bb88d78 100644
+--- a/crates/mh3u-gfx/src/draw.rs
++++ b/crates/mh3u-gfx/src/draw.rs
+@@ -846,7 +846,7 @@ fn half_to_f32(h: u16) -> f32 {
+ }
+ 
+ /// How many bytes one element of an attribute format takes.
+-fn attribute_size(format: u32) -> u32 {
++pub(crate) fn attribute_size(format: u32) -> u32 {
+     attribute_layout(format).map_or(4, |(sizes, _)| sizes.iter().sum::<u32>().div_ceil(8))
+ }
+ 
+@@ -2167,7 +2167,10 @@ impl Gx2 {
+     ) -> Option<DrawIndices> {
+         let (_, expand) = topology_of(primitive)?;
+         let bytes = match indexed {
+-            Some((kind, address)) => g.with_bytes(address, index_bytes(kind, count), xxhash_rust::xxh3::xxh3_64),
++            Some((kind, address)) => {
++                Lap::count("index bytes hashed (every draw)", index_bytes(kind, count) as u64);
++                g.with_bytes(address, index_bytes(kind, count), xxhash_rust::xxh3::xxh3_64)
++            }
+             None => 0,
+         };
+         let key = IndexKey {
+@@ -2272,6 +2275,7 @@ impl Gx2 {
+         } else {
+             0
+         };
++        Lap::count("uniform bytes read (every draw)", have as u64);
+         let key = (block.address, vec4s, have as u32);
+         let batch = self.batch.generation;
+         let swaps = self.swaps;
+@@ -2880,6 +2884,7 @@ impl Gx2 {
+                 multiview_mask: None,
+             });
+             self.batch.pass = Some(pass.forget_lifetime());
++            self.batch.last = PassState::default();
+             self.batch.key = Some(key);
+         }
+         let Some(pass) = self.batch.pass.as_mut() else { return };
+@@ -2895,35 +2900,49 @@ impl Gx2 {
+         } else {
+             (0.0, 1.0)
+         };
+-        if vw > 0.0 && vh > 0.0 {
++        // a command that sets what the pass already has changes nothing: leaving it out spares the checking `finish` does for each one
++        let last = &mut self.batch.last;
++        let viewport = if vw > 0.0 && vh > 0.0 {
+             let x = vx.clamp(0.0, target_w as f32);
+             let y = vy.clamp(0.0, target_h as f32);
+-            pass.set_viewport(
+-                x,
+-                y,
+-                vw.min(target_w as f32 - x).max(1.0),
+-                vh.min(target_h as f32 - y).max(1.0),
+-                near,
+-                far,
+-            );
++            [x, y, vw.min(target_w as f32 - x).max(1.0), vh.min(target_h as f32 - y).max(1.0), near, far]
+         } else {
+-            pass.set_viewport(0.0, 0.0, target_w as f32, target_h as f32, near, far);
++            [0.0, 0.0, target_w as f32, target_h as f32, near, far]
++        };
++        if last.viewport != Some(viewport) {
++            let [x, y, w, h, near, far] = viewport;
++            pass.set_viewport(x, y, w, h, near, far);
++            last.viewport = Some(viewport);
+         }
+         let [sx, sy, sw, sh] = st.scissor.map(|coordinate| coordinate.saturating_mul(scale));
+-        if sw > 0 && sh > 0 && sx < target_w && sy < target_h {
+-            pass.set_scissor_rect(sx, sy, sw.min(target_w - sx), sh.min(target_h - sy));
++        let scissor = if sw > 0 && sh > 0 && sx < target_w && sy < target_h {
++            [sx, sy, sw.min(target_w - sx), sh.min(target_h - sy)]
+         } else {
+-            pass.set_scissor_rect(0, 0, target_w, target_h);
++            [0, 0, target_w, target_h]
++        };
++        if last.scissor != Some(scissor) {
++            pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
++            last.scissor = Some(scissor);
++        }
++        if last.pipeline.as_ref() != Some(&entry.pipeline) {
++            pass.set_pipeline(&entry.pipeline);
++            last.pipeline = Some(entry.pipeline.clone());
+         }
+-        pass.set_pipeline(&entry.pipeline);
+-        if stencil.is_some() {
++        if stencil.is_some() && last.stencil != Some(masks[2]) {
+             pass.set_stencil_reference(masks[2]);
++            last.stencil = Some(masks[2]);
++        }
++        for (i, group) in [&group0, &group1, &group2, &group3].into_iter().enumerate() {
++            if last.groups[i].as_ref() != Some(group) {
++                pass.set_bind_group(i as u32, group, &[]);
++                last.groups[i] = Some(group.clone());
++            }
++        }
++        let index = (index_buffer.buffer.clone(), index_buffer.offset, index_buffer.size);
++        if last.index.as_ref() != Some(&index) {
++            pass.set_index_buffer(index_buffer.slice(), wgpu::IndexFormat::Uint32);
++            last.index = Some(index);
+         }
+-        pass.set_bind_group(0, &group0, &[]);
+-        pass.set_bind_group(1, &group1, &[]);
+-        pass.set_bind_group(2, &group2, &[]);
+-        pass.set_bind_group(3, &group3, &[]);
+-        pass.set_index_buffer(index_buffer.slice(), wgpu::IndexFormat::Uint32);
+         pass.draw_indexed(0..index_count, 0, 0..if geo.is_some() { 1 } else { instances.max(1) });
+         lap.mark("pass");
+     }
+@@ -3144,6 +3163,7 @@ pub(crate) fn index_list(
+             let size = if wide { 4 } else { 2 };
+             let mut bytes = vec![0u8; (count * size) as usize];
+             g.read(address, &mut bytes);
++            Lap::count("index bytes read (list made)", bytes.len() as u64);
+             Some(
+                 bytes
+                     .chunks_exact(size as usize)
+@@ -3388,8 +3408,20 @@ impl Lap {
+ }
+ 
+ /// The draws recorded and not yet submitted, and the memory they read from.
++/// What the render pass being recorded has set so far, so a draw sets only what differs from the draw before it. Reset when a pass begins.
++#[derive(Default)]
++pub(crate) struct PassState {
++    viewport: Option<[f32; 6]>,
++    scissor: Option<[u32; 4]>,
++    pipeline: Option<wgpu::RenderPipeline>,
++    stencil: Option<u32>,
++    groups: [Option<wgpu::BindGroup>; 4],
++    index: Option<(wgpu::Buffer, u64, u64)>,
++}
++
+ #[derive(Default)]
+ pub(crate) struct Batch {
++    last: PassState,
+     enc: Option<wgpu::CommandEncoder>,
+     pass: Option<wgpu::RenderPass<'static>>,
+     key: Option<PassKey>,
+diff --git a/crates/mh3u-gfx/src/front.rs b/crates/mh3u-gfx/src/front.rs
+new file mode 100644
+index 0000000..c6b4b2d
+--- /dev/null
++++ b/crates/mh3u-gfx/src/front.rs
+@@ -0,0 +1,854 @@
++//! Working out the draws on a thread of their own.
++//!
++//! The game's thread used to do everything a GX2 call asks for: read the shaders, textures and vertices out of the guest's memory, make or
++//! find the GPU resources for them, and record the draw. Most of that is not the game's business, so here the game's thread (`Front`)
++//! only does what the game has to see at once, and hands the rest, call by call and in order, to a thread that owns the graphics
++//! (`Gx2`). What a draw reads from the guest's memory is copied into the messages (`mirror.rs`), so the other thread sees it as the
++//! game left it, not as the game's code, which has gone on, has rewritten it since.
++//!
++//! `MH3U_GFX_RESOLVER`: `thread` (the default here), `sync` (the same work on the game's thread, through the same copy: for comparing),
++//! `check` (`sync`, and every read of the guest's memory is compared with the memory itself: a difference is something a draw read that
++//! was not copied in time), `off` (no front: the graphics work on the game's thread as before).
++
++use crate::draw::{AttribStream, attribute_size};
++use crate::gx2::{Call, Gx2, Recorded, Recording, Seen, apply_state_call, init_fetch_shader, is_immediate};
++use crate::mirror;
++use crate::state::{State, arg, farg};
++use mh3u_rt::{AssertSend, Ctx, Guest, Gx2Backend};
++use crate::fxmap::HashMap;
++use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
++use std::sync::{Arc, Condvar, Mutex};
++use std::time::{Duration, Instant};
++
++/// How many frames the game's thread may be ahead of the one drawing (`MH3U_GFX_FRAMES_AHEAD` changes it, for measuring).
++const FRAMES_AHEAD: u32 = 2;
++const FRAME: Duration = Duration::from_nanos(16_683_333);
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub enum Mode {
++    Off,
++    Sync,
++    Check,
++    Thread,
++}
++
++/// The mode asked for in `MH3U_GFX_RESOLVER`, if it says one.
++pub fn mode_from_env() -> Option<Mode> {
++    match std::env::var("MH3U_GFX_RESOLVER").unwrap_or_default().trim().to_ascii_lowercase().as_str() {
++        "off" | "0" | "no" | "false" => Some(Mode::Off),
++        "sync" => Some(Mode::Sync),
++        "check" => Some(Mode::Check),
++        "thread" | "on" | "1" | "yes" | "true" => Some(Mode::Thread),
++        _ => None,
++    }
++}
++
++/// Without a setting, only NVIDIA cards get the thread: on an integrated AMD card (limited by the GPU, not the CPU) it measured slower,
++/// and the other makes are not measured yet.
++fn default_mode(vendor: u32) -> Mode {
++    if vendor == 0x10de { Mode::Thread } else { Mode::Off }
++}
++
++/// What the thread that draws is sent.
++enum Msg {
++    /// Messages sent together (a message sent by itself wakes the other thread, which costs more than the call it carries).
++    Batch(Vec<Msg>),
++    /// A context to take the calls' registers from.
++    Init(Box<SendCtx>),
++    Call {
++        updates: Option<Box<mirror::Updates>>,
++        rec: Recorded,
++    },
++    FetchShader {
++        updates: Option<Box<mirror::Updates>>,
++        shader: u32,
++        streams: Arc<[AttribStream]>,
++    },
++}
++
++// the context's pointer to the guest's memory is not used by the graphics, which take their registers from it only
++type SendCtx = AssertSend<Ctx>;
++
++/// How many frames are waiting for the thread that draws.
++type Pending = Arc<(Mutex<u32>, Condvar)>;
++
++enum Back {
++    Inline {
++        gx2: Box<Gx2>,
++        memory: mirror::Back,
++        ctx: Option<SendCtx>,
++        check: bool,
++    },
++    Thread {
++        tx: SyncSender<Msg>,
++        pending: Pending,
++        batch: Vec<Msg>,
++    },
++}
++
++/// How many messages go in a batch at most.
++const BATCH: usize = 256;
++
++/// Vertices and indices up to this size are copied as they are at each draw (exact bytes); bigger ones would go by pages. Every size is
++/// copied as it is for now: the game writes vertex data for the GPU without announcing it.
++const SMALL: u32 = u32::MAX;
++
++pub struct Front {
++    back: Back,
++    contexts: HashMap<u32, State>,
++    current: u32,
++    recording: Option<Recording>,
++    lists: HashMap<u32, Arc<[Recorded]>>,
++    /// The buffer lists are recorded into, kept between lists so it is not grown from nothing for each (a list is thousands of calls).
++    scratch_calls: Vec<Recorded>,
++    fetch: HashMap<u32, Arc<[AttribStream]>>,
++    mirror: mirror::Front,
++    /// The registers calls are applied through (a copy of the game's, made at the first call).
++    scratch: Option<SendCtx>,
++    swaps: u32,
++    interval: u32,
++    next_vsync: Instant,
++    mismatches: u64,
++    inval_bytes: u64,
++    inval_calls: u64,
++    draws: u64,
++    spans_seen: u64,
++    inval_biggest: (u32, u32, u32),
++    /// Bytes copied by the kind of thing (see `CATEGORIES`), and the time capturing, since the last report.
++    by_kind: [u64; 8],
++    /// The image addresses of the colour and depth buffers the game drew into: a texture there is a render target (the graphics sample
++    /// it from the GPU), so its memory is not read.
++    targets: std::collections::HashSet<u32>,
++    capture: Duration,
++    frames_reported: u32,
++    /// Times of the game's thread's share, for the report (only with `MH3U_GFX_FRONT_TIMES`: reading the clock for each call costs a good part of what is measured).
++    timing: bool,
++    tm: Times,
++    ahead: u32,
++    batch_size: usize,
++}
++
++#[derive(Default)]
++struct Times {
++    /// all of `run` (every GX2 call), the state calls' share, the sending, the waits (limiter, vsync), calls seen
++    run: Duration,
++    state: Duration,
++    forward: Duration,
++    wait: Duration,
++    record: Duration,
++    calls: u64,
++}
++
++/// The backend for the game: `gx2` as it is (`Off`), or behind a front.
++pub fn backend(gx2: Gx2, mode: Option<Mode>) -> Box<dyn Gx2Backend> {
++    let mode = mode.unwrap_or_else(|| default_mode(gx2.vendor()));
++    if mode == Mode::Off {
++        return Box::new(gx2);
++    }
++    let gx2 = Box::new(gx2);
++    let mirror = mirror::Front::new();
++    let pool = mirror.pool();
++    let back = match mode {
++        Mode::Thread => {
++            let (tx, rx) = sync_channel(8192);
++            let pending: Pending = Arc::new((Mutex::new(0), Condvar::new()));
++            let (gx2, p, pool) = (AssertSend(gx2), pending.clone(), pool);
++            std::thread::Builder::new()
++                .name("mh3u resolver".into())
++                .spawn(move || {
++                    let gx2 = gx2;
++                    run(*gx2.0, rx, p, pool)
++                })
++                .expect("the resolver thread");
++            eprintln!("[gfx] draws worked out on a thread of their own (MH3U_GFX_RESOLVER=off to work them out on the game's)");
++            Back::Thread {
++                tx,
++                pending,
++                batch: Vec::with_capacity(BATCH),
++            }
++        }
++        _ => {
++            eprintln!(
++                "[gfx] draws worked out on the game's thread through the copy of its memory (MH3U_GFX_RESOLVER={})",
++                if mode == Mode::Check { "check" } else { "sync" }
++            );
++            Back::Inline {
++                gx2,
++                memory: mirror::Back::new().expect("the copy of the guest's memory"),
++                ctx: None,
++                check: mode == Mode::Check,
++            }
++        }
++    };
++    Box::new(Front {
++        back,
++        contexts: HashMap::default(),
++        current: 0,
++        recording: None,
++        lists: HashMap::default(),
++        scratch_calls: Vec::new(),
++        fetch: HashMap::default(),
++        mirror,
++        scratch: None,
++        swaps: 0,
++        interval: 1,
++        next_vsync: Instant::now(),
++        mismatches: 0,
++        inval_bytes: 0,
++        inval_calls: 0,
++        draws: 0,
++        spans_seen: 0,
++        inval_biggest: (0, 0, 0),
++        by_kind: [0; 8],
++        targets: std::collections::HashSet::new(),
++        capture: Duration::ZERO,
++        frames_reported: 0,
++        timing: false,
++        tm: Times::default(),
++        ahead: FRAMES_AHEAD,
++        batch_size: BATCH,
++    })
++}
++
++/// The thread that draws: applies each message, in order, to the graphics.
++fn run(mut gx2: Gx2, rx: Receiver<Msg>, pending: Pending, pool: mirror::Pool) {
++    let mut memory = match mirror::Back::new() {
++        Ok(m) => m,
++        Err(e) => {
++            eprintln!("[gfx] the copy of the guest's memory could not be made: {e:#}");
++            std::process::exit(1);
++        }
++    };
++    let g = memory.guest();
++    let mut ctx: Option<SendCtx> = None;
++    while let Ok(msg) = rx.recv() {
++        let batch = match msg {
++            Msg::Batch(v) => v,
++            one => vec![one],
++        };
++        for msg in batch {
++            match msg {
++                Msg::Batch(_) => {}
++                Msg::Init(c) => ctx = Some(*c),
++                Msg::Call { updates, rec } => {
++                    if let Some(u) = updates {
++                        memory.apply(&u);
++                        pool.give(u);
++                    }
++                    let Some(c) = ctx.as_mut() else { continue };
++                    rec.load(&mut c.0);
++                    gx2.exec(rec.call, &mut c.0, &g, Some(&rec.stack));
++                    if rec.call == Call::SwapScanBuffers {
++                        let (n, done) = &*pending;
++                        *n.lock().unwrap() -= 1;
++                        done.notify_all();
++                    }
++                }
++                Msg::FetchShader {
++                    updates,
++                    shader,
++                    streams,
++                } => {
++                    if let Some(u) = updates {
++                        memory.apply(&u);
++                        pool.give(u);
++                    }
++                    let streams = gx2.intern_fetch(streams);
++                    gx2.fetch_shaders.insert(shader, streams);
++                }
++            }
++        }
++    }
++}
++
++/// A guest address that can be the start of something to read.
++fn pointer(a: u32) -> bool {
++    a >= 0x0200_0000
++}
++
++impl Front {
++    /// A structure the game may change without announcing it: copied again each time (exact bytes, not pages).
++    fn fresh_kind(&mut self, g: &Guest, kind: usize, address: u32, len: u32) {
++        if pointer(address) {
++            let before = self.mirror.copied;
++            self.mirror.fresh(g, address, len);
++            self.by_kind[kind] += self.mirror.copied - before;
++        }
++    }
++
++    /// `ensure`, counting the bytes it had to copy under `kind` (0 shaders, 1 textures, 2 targets, 3 uniforms, 4 indices, 5 vertices,
++    /// 6 arguments of other calls, 7 anything else).
++    fn ensure_kind(&mut self, g: &Guest, kind: usize, address: u32, len: u32) {
++        if pointer(address) {
++            let before = self.mirror.copied;
++            self.mirror.ensure(g, address, len.min(1 << 26), kind == 0);
++            self.by_kind[kind] += self.mirror.copied - before;
++        }
++    }
++
++    /// Everything a draw in `st` reads from the guest's memory goes into the copy.
++    fn capture_draw(&mut self, g: &Guest, st: &State, primitive: u32, indexed: Option<(u32, u32)>, count: u32, first: u32, instances: u32) {
++        let u = |a: u32| g.u32(a);
++        // the shaders: their structures, programs and loop constants
++        if pointer(st.vertex_shader) {
++            let vs = st.vertex_shader;
++            self.fresh_kind(g, 0, vs, 0x140);
++            self.ensure_kind(g, 0, u(vs + 0xd4), u(vs + 0xd0).min(1 << 20));
++            self.ensure_kind(g, 0, u(vs + 0xf8), 8 * u(vs + 0xf4).min(32));
++        }
++        if pointer(st.pixel_shader) {
++            let ps = st.pixel_shader;
++            self.fresh_kind(g, 0, ps, 0xe8);
++            self.ensure_kind(g, 0, u(ps + 0xa8), u(ps + 0xa4).min(1 << 20));
++            self.ensure_kind(g, 0, u(ps + 0xcc), 8 * u(ps + 0xc8).min(32));
++        }
++        if pointer(st.geometry_shader) {
++            let gs = st.geometry_shader;
++            self.fresh_kind(g, 0, gs, 0x140);
++            self.ensure_kind(g, 0, u(gs + 0x50), u(gs + 0x4c).min(1 << 20));
++            self.ensure_kind(g, 0, u(gs + 0x58), u(gs + 0x54).min(1 << 20));
++        }
++        // the textures (structure and image data), samplers and targets
++        for &cb in st.colour_buffers.iter().filter(|&&c| pointer(c)) {
++            self.targets.insert(u(cb + 0x24));
++        }
++        if pointer(st.depth_buffer) {
++            self.targets.insert(u(st.depth_buffer + 0x24));
++        }
++        for &t in st.pixel_textures.iter().filter(|&&t| pointer(t)) {
++            self.fresh_kind(g, 1, t, 0xa0);
++            self.ensure_kind(g, 1, u(t + 0x24), u(t + 0x20));
++            self.ensure_kind(g, 1, u(t + 0x2c), u(t + 0x28));
++        }
++        for &s in st.pixel_samplers.iter().filter(|&&s| pointer(s)) {
++            self.fresh_kind(g, 1, s, 0x10);
++        }
++        for &cb in st.colour_buffers.iter().filter(|&&c| pointer(c)) {
++            self.fresh_kind(g, 2, cb, 0x80);
++        }
++        self.fresh_kind(g, 2, st.depth_buffer, 0x80);
++        // the uniform blocks
++        for block in st.vertex_blocks.iter().chain(&st.pixel_blocks).chain(&st.geometry_blocks) {
++            self.fresh_kind(g, 3, block.address, block.size.min(1 << 20));
++        }
++        // the indices, and the vertices they reach (the way `index_list` works them out: little-endian for the types 0 and 1, base vertex
++        // added, a strip's restart index left out)
++        let (mut lowest, mut highest) = (first, first.wrapping_add(count).wrapping_sub(1));
++        if let Some((kind, address)) = indexed {
++            let (wide, big) = (matches!(kind, 1 | 9), matches!(kind, 4 | 9));
++            let bytes = count.saturating_mul(if wide { 4 } else { 2 });
++            if bytes <= SMALL {
++                self.fresh_kind(g, 4, address, bytes);
++            } else {
++                self.ensure_kind(g, 4, address, bytes);
++            }
++            if pointer(address) && count > 0 {
++                let restart = if matches!(primitive, 3 | 6) { st.restart_index } else { None };
++                let (mut lo, mut hi) = (u32::MAX, 0u32);
++                g.with_bytes(address, bytes as usize, |raw| {
++                    let mut seen = |v: u32| {
++                        if Some(v) != restart {
++                            let v = v.wrapping_add(first);
++                            lo = lo.min(v);
++                            hi = hi.max(v);
++                        }
++                    };
++                    match (wide, big) {
++                        (true, true) => raw.chunks_exact(4).for_each(|c| seen(u32::from_be_bytes([c[0], c[1], c[2], c[3]]))),
++                        (true, false) => raw.chunks_exact(4).for_each(|c| seen(u32::from_le_bytes([c[0], c[1], c[2], c[3]]))),
++                        (false, true) => raw.chunks_exact(2).for_each(|c| seen(u32::from(u16::from_be_bytes([c[0], c[1]])))),
++                        (false, false) => raw.chunks_exact(2).for_each(|c| seen(u32::from(u16::from_le_bytes([c[0], c[1]])))),
++                    }
++                });
++                if lo <= hi {
++                    (lowest, highest) = (lo, hi);
++                }
++            }
++        }
++        let vertices = highest.wrapping_sub(lowest).wrapping_add(1).clamp(1, 1 << 22);
++        // one span for each buffer and range of items, as `cached_streams` reads them: (buffer, first item, items, bytes past the last
++        // item's start)
++        let fetch = self.fetch.get(&st.fetch_shader).cloned();
++        let mut spans: Vec<(u32, u32, u32, u32)> = Vec::new();
++        for a in fetch.iter().flat_map(|f| f.iter()).take(16) {
++            let (from, items) = if a.per_instance {
++                (0, instances.max(1).div_ceil(a.divisor.max(1)))
++            } else {
++                (lowest, vertices)
++            };
++            let end = a.offset + attribute_size(a.format);
++            match spans.iter_mut().find(|s| (s.0, s.1, s.2) == (a.buffer, from, items)) {
++                Some(s) => s.3 = s.3.max(end),
++                None => spans.push((a.buffer, from, items, end)),
++            }
++        }
++        self.spans_seen += spans.len() as u64;
++        for (buffer, from, items, end) in spans {
++            let Some(b) = st.attrib_buffers.get((buffer as usize).min(15)) else {
++                continue;
++            };
++            if b.address == 0 || items == 0 {
++                continue;
++            }
++            let start = u64::from(from) * u64::from(b.stride);
++            let len = ((u64::from(items) - 1) * u64::from(b.stride) + u64::from(end)).min(u64::from(b.size).saturating_sub(start)).min(1 << 28);
++            if let Ok(at) = u32::try_from(u64::from(b.address) + start) {
++                if len <= u64::from(SMALL) {
++                    self.fresh_kind(g, 5, at, len as u32);
++                } else {
++                    self.ensure_kind(g, 5, at, len as u32);
++                }
++            }
++        }
++    }
++
++    /// The structures a call that reads surfaces refers to by its first arguments.
++    fn capture_arguments(&mut self, g: &Guest, rec: &Recorded) {
++        for &r in &rec.r[..4] {
++            self.fresh_kind(g, 6, r, 0x100);
++        }
++    }
++
++    /// Sends a call to be applied to the graphics (with the memory it reads), now or on the thread.
++    fn forward(&mut self, g: &Guest, rec: Recorded) {
++        let started = self.timing.then(Instant::now);
++        self.forward_inner(g, rec);
++        if let Some(s) = started {
++            self.tm.forward += s.elapsed();
++        }
++    }
++
++    fn forward_inner(&mut self, g: &Guest, rec: Recorded) {
++        let updates = self.mirror.take();
++        match &mut self.back {
++            Back::Thread { tx, batch, .. } => {
++                batch.push(Msg::Call { updates, rec });
++                if batch.len() >= self.batch_size {
++                    let _ = tx.send(Msg::Batch(std::mem::replace(batch, Vec::with_capacity(BATCH))));
++                }
++            }
++            Back::Inline { gx2, memory, ctx, check } => {
++                if let Some(u) = updates {
++                    memory.apply(&u);
++                    self.mirror.pool().give(u);
++                }
++                let Some(c) = ctx.as_mut() else { return };
++                rec.load(&mut c.0);
++                let copy = memory.guest();
++                if *check {
++                    mh3u_rt::log_reads(true);
++                    let _ = mh3u_rt::take_reads();
++                }
++                gx2.exec(rec.call, &mut c.0, &copy, Some(&rec.stack));
++                if *check {
++                    mh3u_rt::log_reads(false);
++                    let reads = mh3u_rt::take_reads();
++                    let st = self.contexts.entry(self.current).or_default().clone();
++                    self.mismatches += compare(g, &copy, rec.call, &reads, &st);
++                }
++            }
++        }
++    }
++
++    /// Sends what is waiting in the batch.
++    fn flush(&mut self) {
++        if let Back::Thread { tx, batch, .. } = &mut self.back {
++            if !batch.is_empty() {
++                let _ = tx.send(Msg::Batch(std::mem::replace(batch, Vec::with_capacity(BATCH))));
++            }
++        }
++    }
++
++    /// Every 120 frames: what the copy cost, by the kind of thing copied.
++    fn report(&mut self) {
++        self.frames_reported += 1;
++        if self.frames_reported < 120 || std::env::var_os("MH3U_GFX_TIMES").is_none() && std::env::var_os("MH3U_FPS").is_none() {
++            return;
++        }
++        let n = f64::from(self.frames_reported);
++        let names = ["shaders", "textures", "targets", "uniforms", "indices", "vertices", "other calls", "unsorted"];
++        let parts: Vec<String> = names
++            .iter()
++            .zip(self.by_kind)
++            .map(|(name, b)| format!("{name} {:.0} KB", b as f64 / n / 1024.0))
++            .collect();
++        eprintln!(
++            "[gfx mirror] a frame: capturing {:.2} ms, copied {}; mismatches so far {}",
++            self.capture.as_secs_f64() * 1000.0 / n,
++            parts.join(", "),
++            self.mismatches
++        );
++        if self.timing {
++            let ms = |d: Duration| d.as_secs_f64() * 1000.0 / n;
++            eprintln!(
++                "[gfx front] the game's thread a frame: in the graphics calls {:.2} ms (state {:.2}, sending {:.2}, recording lists {:.2}, capturing {:.2}; waiting {:.2}); {:.0} calls outside lists",
++                ms(self.tm.run),
++                ms(self.tm.state),
++                ms(self.tm.forward),
++                ms(self.tm.record),
++                ms(self.capture),
++                ms(self.tm.wait),
++                self.tm.calls as f64 / n
++            );
++            self.tm = Times::default();
++        }
++        eprintln!(
++            "[gfx mirror] draws captured a frame: {:.0}, vertex spans {:.0}",
++            self.draws as f64 / n,
++            self.spans_seen as f64 / n
++        );
++        self.draws = 0;
++        self.spans_seen = 0;
++        eprintln!(
++            "[gfx mirror] invalidations a frame: {:.0} calls, {:.0} KB; biggest {:#x} bytes at {:#x} (mode {:#x})",
++            self.inval_calls as f64 / n,
++            self.inval_bytes as f64 / n / 1024.0,
++            self.inval_biggest.1,
++            self.inval_biggest.0,
++            self.inval_biggest.2
++        );
++        self.inval_bytes = 0;
++        self.inval_calls = 0;
++        self.inval_biggest = (0, 0, 0);
++        self.by_kind = [0; 8];
++        self.capture = Duration::ZERO;
++        self.frames_reported = 0;
++    }
++
++    /// One call, from the game or from a display list.
++    fn exec_call(&mut self, rec: &Recorded, c: Option<&mut Ctx>, g: &Guest) {
++        let call = rec.call;
++        // registers for applying the call to this thread's copy of the state
++        let mut scratch = self.scratch.take();
++        if let Some(s) = scratch.as_mut() {
++            rec.load(&mut s.0);
++        }
++        let stack = rec.stack;
++        match call {
++            Call::DrawEx | Call::DrawIndexedEx => {
++                if let Some(s) = scratch.as_ref() {
++                    let a = |n: usize| arg(&s.0, g, Some(&stack), n);
++                    let (indexed, count, first, instances) = if call == Call::DrawEx {
++                        (None, a(1), a(2), a(3))
++                    } else {
++                        (Some((a(2), a(3))), a(1), a(4), a(5))
++                    };
++                    // the table is taken out for the call (the state is only read), so the state need not be copied for each draw
++                    let contexts = std::mem::take(&mut self.contexts);
++                    if let Some(st) = contexts.get(&self.current) {
++                        self.draws += 1;
++                        let started = self.timing.then(Instant::now);
++                        self.capture_draw(g, st, rec.r[0], indexed, count, first, instances);
++                        if let Some(s) = started {
++                            self.capture += s.elapsed();
++                        }
++                    }
++                    self.contexts = contexts;
++                }
++                self.forward(g, *rec);
++            }
++            Call::InitFetchShaderEx => {
++                let (shader, streams) = init_fetch_shader(g, rec.r[0], rec.r[1], rec.r[2], rec.r[3]);
++                self.fresh_kind(g, 6, rec.r[0], 0x20);
++                self.fetch.insert(shader, streams.clone());
++                let updates = self.mirror.take();
++                match &mut self.back {
++                    Back::Thread { batch, .. } => {
++                        batch.push(Msg::FetchShader {
++                            updates,
++                            shader,
++                            streams,
++                        });
++                    }
++                    Back::Inline { gx2, memory, .. } => {
++                        if let Some(u) = updates {
++                            memory.apply(&u);
++                            self.mirror.pool().give(u);
++                        }
++                        let streams = gx2.intern_fetch(streams);
++                        gx2.fetch_shaders.insert(shader, streams);
++                    }
++                }
++            }
++            // the size of the code the fetch shader would be
++            Call::CalcFetchShaderSizeEx => {
++                if let Some(c) = c {
++                    c.r[3] = (32 + 16 * c.r[3]).div_ceil(16) * 16;
++                }
++            }
++            Call::InitSampler
++            | Call::InitSamplerClamping
++            | Call::InitSamplerXYFilter
++            | Call::InitSamplerZMFilter
++            | Call::InitSamplerLOD
++            | Call::InitSamplerDepthCompare => {
++                if let Some(s) = scratch.as_ref() {
++                    init_sampler(g, call, &s.0);
++                }
++            }
++            Call::GetSwapStatus => {
++                if let Some(c) = c {
++                    for (p, v) in [(c.r[3], self.swaps), (c.r[4], self.swaps)] {
++                        if p != 0 {
++                            g.put_u32(p, v);
++                        }
++                    }
++                    c.r[3] = 0;
++                }
++            }
++            Call::SetSwapInterval => self.interval = rec.r[0],
++            Call::GetSwapInterval => {
++                if let Some(c) = c {
++                    c.r[3] = self.interval;
++                }
++            }
++            Call::WaitForVsync => {
++                let now = Instant::now();
++                if self.next_vsync > now {
++                    std::thread::sleep(self.next_vsync - now);
++                    self.tm.wait += now.elapsed();
++                }
++                // a game that fell behind does not owe the frames it missed
++                self.next_vsync = self.next_vsync.max(now) + FRAME;
++            }
++            Call::Invalidate => {
++                self.inval_bytes += u64::from(rec.r[2]);
++                self.inval_calls += 1;
++                if rec.r[2] > self.inval_biggest.1 && rec.r[2] < 0x8000_0000 {
++                    self.inval_biggest = (rec.r[1], rec.r[2], rec.r[0]);
++                }
++                let (mode, address, size) = (rec.r[0], rec.r[1], rec.r[2]);
++                if mode & !(0x10 | 0x20) == 0 {
++                    // the colour and depth buffers: the GPU wrote there, not the game
++                } else if size >= 0x8000_0000 && mode & !8 == 0 {
++                    // the whole address space, for the shaders: the game says nothing of where they changed
++                    self.mirror.invalidate_shaders();
++                } else {
++                    self.mirror.invalidate(address, size);
++                }
++                self.forward(g, *rec);
++            }
++            Call::SwapScanBuffers => {
++                if let Back::Thread { pending, .. } = &self.back {
++                    *pending.0.lock().unwrap() += 1;
++                }
++                self.forward(g, *rec);
++                self.flush();
++                self.swaps += 1;
++                self.report();
++                if let Back::Thread { pending, .. } = &self.back {
++                    let (n, done) = &**pending;
++                    let started = self.timing.then(Instant::now);
++                    let mut n = n.lock().unwrap();
++                    while *n > self.ahead {
++                        n = done.wait(n).unwrap();
++                    }
++                    if let Some(s) = started {
++                        self.tm.wait += s.elapsed();
++                    }
++                }
++            }
++            Call::ClearColor | Call::ClearDepthStencilEx | Call::CopySurface | Call::CopyColorBufferToScanBuffer => {
++                self.capture_arguments(g, rec);
++                self.forward(g, *rec);
++            }
++            _ => {
++                if let Some(s) = scratch.as_ref() {
++                    let a = |n: usize| arg(&s.0, g, Some(&stack), n);
++                    let started = self.timing.then(Instant::now);
++                    apply_state_call(&mut self.contexts, &mut self.current, call, &s.0, &a);
++                    if let Some(s) = started {
++                        self.tm.state += s.elapsed();
++                    }
++                }
++                self.forward(g, *rec);
++            }
++        }
++        self.scratch = scratch;
++    }
++
++    fn run(&mut self, call: Call, c: &mut Ctx, g: &Guest) {
++        if !self.timing {
++            return self.run_inner(call, c, g);
++        }
++        let started = Instant::now();
++        self.run_inner(call, c, g);
++        self.tm.run += started.elapsed();
++        self.tm.calls += 1;
++    }
++
++    fn run_inner(&mut self, call: Call, c: &mut Ctx, g: &Guest) {
++        // the game's code ran since the last call: what was copied then no longer stands for its memory
++        self.mirror.new_stretch();
++        if self.scratch.is_none() {
++            let copy = c.clone();
++            match &mut self.back {
++                Back::Thread { batch, .. } => {
++                    batch.push(Msg::Init(Box::new(AssertSend(copy.clone()))));
++                }
++                Back::Inline { ctx, .. } => *ctx = Some(AssertSend(copy.clone())),
++            }
++            self.scratch = Some(AssertSend(copy));
++        }
++        match call {
++            Call::BeginDisplayListEx => {
++                self.recording = Some(Recording {
++                    address: c.r[3],
++                    calls: std::mem::take(&mut self.scratch_calls),
++                    made: 0,
++                    seen: Seen::default(),
++                });
++            }
++            Call::EndDisplayList => {
++                if let Some(mut r) = self.recording.take() {
++                    c.r[3] = 0x20 + 0x10 * r.made;
++                    self.lists.insert(r.address, Arc::from(r.calls.as_slice()));
++                    r.calls.clear();
++                    self.scratch_calls = r.calls;
++                }
++            }
++            Call::DirectCallDisplayList => {
++                let Some(calls) = self.lists.get(&c.r[3]).cloned() else { return };
++                for rec in calls.iter() {
++                    self.exec_call(rec, None, g);
++                }
++                self.flush();
++            }
++            _ => {
++                if let Some(r) = self.recording.as_mut().filter(|_| !is_immediate(call)) {
++                    r.made += 1;
++                    if !r.seen.redundant(call, c.r[3], c.r[4]) {
++                        let started = self.timing.then(Instant::now);
++                        r.calls.push(Recorded::new(call, c, g));
++                        if let Some(s) = started {
++                            self.tm.record += s.elapsed();
++                        }
++                    }
++                } else {
++                    let rec = Recorded::new(call, c, g);
++                    self.exec_call(&rec, Some(c), g);
++                }
++            }
++        }
++    }
++}
++
++/// `GX2InitSampler` and its variants: they write the sampler's words in the guest's memory, at once.
++fn init_sampler(g: &Guest, call: Call, c: &Ctx) {
++    let a = |n: usize| c.r[3 + n];
++    match call {
++        Call::InitSampler => {
++            let (s, clamp, filter) = (a(0), a(1) & 15, a(2) & 15);
++            g.put_u32(s, clamp | clamp << 4 | clamp << 8 | filter << 12 | filter << 16);
++            g.put_u32(s + 4, 0xf | (13 * 16) << 18);
++            g.put_u32(s + 8, 0);
++        }
++        Call::InitSamplerClamping => {
++            let (s, x, y, z) = (a(0), a(1) & 15, a(2) & 15, a(3) & 15);
++            let w = g.u32(s) & !0xfff;
++            g.put_u32(s, w | x | y << 4 | z << 8);
++        }
++        Call::InitSamplerXYFilter => {
++            let (s, mag, min) = (a(0), a(1) & 15, a(2) & 15);
++            let w = g.u32(s) & !(0xff << 12);
++            g.put_u32(s, w | mag << 12 | min << 16);
++        }
++        Call::InitSamplerZMFilter => {
++            let (s, z, mip) = (a(0), a(1) & 15, a(2) & 15);
++            let w = g.u32(s) & !(0xff << 20);
++            g.put_u32(s, w | z << 20 | mip << 24);
++        }
++        Call::InitSamplerLOD => {
++            let s = a(0);
++            let q = |v: f32| (v.clamp(0.0, 63.0) * 16.0) as u32 & 0x3ff;
++            let w = g.u32(s + 4) & 0xff;
++            g.put_u32(s + 4, w | q(farg(c, 0)) << 8 | q(farg(c, 1)) << 18);
++            g.put_u32(s + 8, farg(c, 2).to_bits());
++        }
++        Call::InitSamplerDepthCompare => {
++            let (s, func) = (a(0), a(1) & 15);
++            let w = g.u32(s + 4) & !0xf;
++            g.put_u32(s + 4, w | func);
++        }
++        _ => {}
++    }
++}
++
++/// What the draw's state says is at `address`, for the reports of reads that differ.
++fn describe(g: &Guest, st: &State, address: u32) -> String {
++    let inside = |start: u32, len: u32| start != 0 && address >= start && address - start < len.max(1);
++    for (i, &t) in st.pixel_textures.iter().enumerate().filter(|&(_, &t)| t != 0) {
++        let (image, isize, mip, msize) = (g.u32(t + 0x24), g.u32(t + 0x20), g.u32(t + 0x2c), g.u32(t + 0x28));
++        if inside(t, 0xa0) {
++            return format!("in the structure of texture unit {i}");
++        }
++        if inside(image, isize) {
++            return format!("in the image of texture unit {i} ({image:#x}, {isize:#x} bytes, format {:#x})", g.u32(t + 0x14));
++        }
++        if inside(mip, msize) {
++            return format!("in the mip data of texture unit {i} ({mip:#x}, {msize:#x} bytes)");
++        }
++        if inside(image, 0x40_0000) {
++            return format!("past the image of texture unit {i} ({image:#x}, size field {isize:#x}, format {:#x}, mips {})", g.u32(t + 0x14), g.u32(t + 0x10));
++        }
++    }
++    for (i, b) in st.attrib_buffers.iter().enumerate() {
++        if inside(b.address, b.size) {
++            return format!("in vertex buffer {i} ({:#x}, {:#x} bytes, stride {})", b.address, b.size, b.stride);
++        }
++    }
++    for blocks in [&st.vertex_blocks, &st.pixel_blocks, &st.geometry_blocks] {
++        for (i, b) in blocks.iter().enumerate() {
++            if inside(b.address, b.size) {
++                return format!("in uniform block {i} ({:#x}, {:#x} bytes)", b.address, b.size);
++            }
++        }
++    }
++    "in nothing the state names".to_string()
++}
++
++/// How many of the `reads` a call made of the copy differ from the memory itself (they should be the same: the copy was made from it).
++fn compare(live: &Guest, copy: &Guest, call: Call, reads: &[(u32, u32)], st: &State) -> u64 {
++    static SHOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++    let mut bad = 0;
++    for &(address, len) in reads {
++        let (mut a, mut b) = (vec![0u8; len as usize], vec![0u8; len as usize]);
++        live.read_unlogged(address, &mut a);
++        copy.read_unlogged(address, &mut b);
++        if a != b {
++            bad += 1;
++            if SHOWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 60 {
++                let first = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(0);
++                eprintln!(
++                    "[gfx mirror] {}: {len} bytes read at {address:#x} differ from the game's memory (first at +{first:#x}); {}",
++                    call.name(),
++                    describe(live, st, address)
++                );
++            }
++        }
++    }
++    bad
++}
++
++impl Gx2Backend for Front {
++    fn implements(&self, name: &str) -> bool {
++        Call::from_name(name).is_some()
++    }
++
++    fn resolve(&self, name: &str) -> Option<u32> {
++        Call::from_name(name).map(|c| c as u32)
++    }
++
++    fn call_id(&mut self, id: Option<u32>, name: &str, c: &mut Ctx, g: &Guest) {
++        let call = id.and_then(|id| Call::ALL.get(id as usize)).copied().or_else(|| Call::from_name(name));
++        if let Some(call) = call {
++            self.run(call, c, g);
++        }
++    }
++
++    fn call(&mut self, name: &str, c: &mut Ctx, g: &Guest) {
++        if let Some(call) = Call::from_name(name) {
++            self.run(call, c, g);
++        }
++    }
++}
+diff --git a/crates/mh3u-gfx/src/gx2.rs b/crates/mh3u-gfx/src/gx2.rs
+index a7c8af7..c241763 100644
+--- a/crates/mh3u-gfx/src/gx2.rs
++++ b/crates/mh3u-gfx/src/gx2.rs
+@@ -335,6 +335,11 @@ fn sample_upscaler(uv: vec2<f32>) -> vec3<f32> {
+ impl Gx2 {
+     /// Draws the mod overlay (unless `MH3U_OVERLAY=off`), with the game's data from the dump's base folder, the wishlist in `dir`, and
+     /// the hunters' names from the game's save folder (to find the live save by).
++    /// The graphics card's vendor number (0x10de NVIDIA, 0x1002 AMD, 0x8086 Intel).
++    pub fn vendor(&self) -> u32 {
++        self.d.adapter.get_info().vendor
++    }
++
+     pub fn use_overlay(&mut self, dump_base: std::path::PathBuf, dir: std::path::PathBuf, save_dir: std::path::PathBuf) {
+         if (crate::overlay::enabled() || std::env::var_os("MH3U_FPS").is_some()) && self.d.window.is_some() {
+             let mut overlay = crate::overlay::Overlay::new(dump_base, dir, save_dir);
+@@ -882,15 +887,15 @@ impl Gx2 {
+ /// A call kept in a display list: which call, the argument registers (r3..r10, f1..f8) and the stack arguments.
+ /// Fixed-size, so recording and replaying a list allocates nothing per call.
+ #[derive(Clone, Copy)]
+-struct Recorded {
+-    call: Call,
+-    r: [u32; 8],
+-    f: [u64; 8],
+-    stack: [u32; 8],
++pub(crate) struct Recorded {
++    pub(crate) call: Call,
++    pub(crate) r: [u32; 8],
++    pub(crate) f: [u64; 8],
++    pub(crate) stack: [u32; 8],
+ }
+ 
+ impl Recorded {
+-    fn new(call: Call, c: &Ctx, g: &Guest) -> Recorded {
++    pub(crate) fn new(call: Call, c: &Ctx, g: &Guest) -> Recorded {
+         let mut r = [0; 8];
+         r.copy_from_slice(&c.r[3..11]);
+         let mut f = [0; 8];
+@@ -904,32 +909,32 @@ impl Recorded {
+     }
+ 
+     /// Puts the recorded arguments back where the call reads them (only these registers are read by `exec`).
+-    fn load(&self, c: &mut Ctx) {
++    pub(crate) fn load(&self, c: &mut Ctx) {
+         c.r[3..11].copy_from_slice(&self.r);
+         c.f[1..9].copy_from_slice(&self.f);
+     }
+ }
+ 
+ /// A display list being recorded.
+-struct Recording {
+-    address: u32,
+-    calls: Vec<Recorded>,
++pub(crate) struct Recording {
++    pub(crate) address: u32,
++    pub(crate) calls: Vec<Recorded>,
+     /// The calls made into it, the ones left out as redundant too (the size the game is told counts them, as before).
+-    made: u32,
+-    seen: Seen,
++    pub(crate) made: u32,
++    pub(crate) seen: Seen,
+ }
+ 
+ /// The texture and sampler each pixel unit was last set to in the list being recorded, since its last change of context: setting a unit
+ /// to what it already is changes nothing, so such a call is not recorded (the game sets every unit for every draw).
+ #[derive(Default)]
+-struct Seen {
++pub(crate) struct Seen {
+     textures: [Option<u32>; 18],
+     samplers: [Option<u32>; 18],
+ }
+ 
+ impl Seen {
+     /// Whether the call (with r3, r4) would change nothing when played back right after the calls recorded so far.
+-    fn redundant(&mut self, call: Call, r3: u32, r4: u32) -> bool {
++    pub(crate) fn redundant(&mut self, call: Call, r3: u32, r4: u32) -> bool {
+         let slots = match call {
+             // the state the units are in is another context's (or a fresh one) from here on
+             Call::SetupContextStateEx | Call::SetContextState => {
+@@ -953,7 +958,7 @@ impl Seen {
+ /// in an object in the CPU's memory (`GX2Calc*`, `GX2Init*`). The console runs those at once even while a list is being made; recorded,
+ /// they would run only when the list is played, reading their inputs (a fetch shader's attribute array, often on the caller's stack) long
+ /// after the game has reused that memory, and giving no result (a size) to the caller now.
+-fn is_immediate(call: Call) -> bool {
++pub(crate) fn is_immediate(call: Call) -> bool {
+     matches!(
+         call,
+         Call::BeginDisplayListEx
+@@ -994,6 +999,177 @@ pub(crate) fn init_fetch_shader(
+     (fs, streams.into())
+ }
+ 
++/// The calls that only set what a draw is made with (the context and its shaders, buffers, textures, targets and fixed-function
++/// state): applied to `contexts`, and true when `call` was one. The game's thread keeps its own copy of the state with this, to know
++/// what a draw is going to read; the thread that draws keeps another.
++pub(crate) fn apply_state_call(
++    contexts: &mut HashMap<u32, State>,
++    current: &mut u32,
++    call: Call,
++    c: &Ctx,
++    a: &dyn Fn(usize) -> u32,
++) -> bool {
++    match call {
++        Call::SetupContextStateEx => {
++            contexts.insert(c.r[3], State::default());
++            *current = c.r[3];
++        }
++        Call::SetContextState => *current = c.r[3],
++        Call::SetVertexShader => {
++            let v = a(0);
++            if false {
++                eprintln!("  vertex shader {v:#x}");
++            }
++            contexts.entry(*current).or_default().vertex_shader = v;
++        }
++        Call::SetPrimitiveRestartIndex => {
++            let v = a(0);
++            contexts.entry(*current).or_default().restart_index = Some(v);
++        }
++        Call::SetPixelShader => {
++            let v = a(0);
++            if false {
++                eprintln!("  pixel shader {v:#x}");
++            }
++            contexts.entry(*current).or_default().pixel_shader = v;
++        }
++        Call::SetGeometryShader => {
++            let v = a(0);
++            contexts.entry(*current).or_default().geometry_shader = v;
++        }
++        Call::SetFetchShader => {
++            let v = a(0);
++            contexts.entry(*current).or_default().fetch_shader = v;
++        }
++        Call::SetAttribBuffer => {
++            let (i, size, stride, address) = (a(0), a(1), a(2), a(3));
++            if let Some(b) = contexts.entry(*current).or_default().attrib_buffers.get_mut(i as usize) {
++                *b = crate::state::AttribBuffer { address, size, stride };
++            }
++        }
++        Call::SetVertexUniformBlock | Call::SetPixelUniformBlock | Call::SetGeometryUniformBlock => {
++            let (i, size, address) = (a(0), a(1), a(2));
++            let st = contexts.entry(*current).or_default();
++            let blocks = if call == Call::SetVertexUniformBlock {
++                &mut st.vertex_blocks
++            } else if call == Call::SetGeometryUniformBlock {
++                &mut st.geometry_blocks
++            } else {
++                &mut st.pixel_blocks
++            };
++            if let Some(b) = blocks.get_mut(i as usize) {
++                *b = crate::state::UniformBlock { address, size };
++            }
++        }
++        Call::SetPixelTexture => {
++            let (t, unit) = (a(0), a(1));
++            if let Some(slot) = contexts.entry(*current).or_default().pixel_textures.get_mut(unit as usize) {
++                *slot = t;
++            }
++        }
++        Call::SetPixelSampler => {
++            let (s, unit) = (a(0), a(1));
++            if let Some(slot) = contexts.entry(*current).or_default().pixel_samplers.get_mut(unit as usize) {
++                *slot = s;
++            }
++        }
++        Call::SetColorBuffer => {
++            let (cb, target) = (a(0), a(1));
++            if let Some(slot) = contexts.entry(*current).or_default().colour_buffers.get_mut(target as usize) {
++                *slot = cb;
++            }
++        }
++        Call::SetDepthBuffer => {
++            let v = a(0);
++            contexts.entry(*current).or_default().depth_buffer = v;
++        }
++        Call::SetViewport => {
++            let v = [farg(c, 0), farg(c, 1), farg(c, 2), farg(c, 3), farg(c, 4), farg(c, 5)];
++            contexts.entry(*current).or_default().viewport = v;
++        }
++        Call::SetScissor => {
++            let v = [a(0), a(1), a(2), a(3)];
++            contexts.entry(*current).or_default().scissor = v;
++        }
++        Call::SetBlendControl => {
++            let t = a(0) as usize;
++            let b = crate::state::Blend {
++                colour_src: a(1),
++                colour_dst: a(2),
++                colour_op: a(3),
++                separate_alpha: a(4) != 0,
++                alpha_src: a(5),
++                alpha_dst: a(6),
++                alpha_op: a(7),
++            };
++            if let Some(slot) = contexts.entry(*current).or_default().blend.get_mut(t) {
++                *slot = b;
++            }
++        }
++        Call::SetColorControl => {
++            let v = [a(0), a(1), a(2), a(3)];
++            contexts.entry(*current).or_default().colour_control = v;
++        }
++        Call::SetTargetChannelMasks => {
++            let mut m = 0;
++            for k in 0..8 {
++                m |= (a(k) & 0xf) << (4 * k);
++            }
++            contexts.entry(*current).or_default().target_masks = m;
++        }
++        Call::SetDepthOnlyControl => {
++            let (t, w, f) = (a(0) != 0, a(1) != 0, a(2));
++            let st = contexts.entry(*current).or_default();
++            (st.depth_test, st.depth_write, st.depth_func, st.stencil_test) = (t, w, f, false);
++        }
++        Call::SetDepthStencilControl => {
++            let (t, w, f, s) = (a(0) != 0, a(1) != 0, a(2), a(3) != 0);
++            // front: comparison, pass, depth fail, fail; then the same for back faces (the arguments' order)
++            let (back_enabled, front, back) = (a(4) != 0, [a(5), a(8), a(7), a(6)], [a(9), a(12), a(11), a(10)]);
++            let st = contexts.entry(*current).or_default();
++            (st.depth_test, st.depth_write, st.depth_func, st.stencil_test) = (t, w, f, s);
++            (st.stencil.back_enabled, st.stencil.front, st.stencil.back) = (back_enabled, front, back);
++        }
++        Call::SetStencilMask => {
++            let masks = std::array::from_fn(|k| a(k) & 0xff);
++            contexts.entry(*current).or_default().stencil.masks = Some(masks);
++        }
++        Call::SetPolygonOffset => {
++            let offset = std::array::from_fn(|k| farg(c, k));
++            contexts.entry(*current).or_default().polygon_offset = offset;
++        }
++        Call::SetCullOnlyControl => {
++            // GX2 writes the whole of PA_SU_SC_MODE_CNTL here, as GX2SetPolygonControl with no polygon modes and no polygon
++            // offset: a draw after it has no depth bias until GX2SetPolygonControl turns it on again
++            let (face, front, back) = (a(0), a(1) != 0, a(2) != 0);
++            let st = contexts.entry(*current).or_default();
++            (st.front_face, st.cull_front, st.cull_back) = (face, front, back);
++            (st.offset_front, st.offset_back) = (false, false);
++        }
++        Call::SetPolygonControl => {
++            let (face, front, back) = (a(0), a(1) != 0, a(2) != 0);
++            let (offset_front, offset_back) = (a(6) != 0, a(7) != 0);
++            let st = contexts.entry(*current).or_default();
++            (st.front_face, st.cull_front, st.cull_back) = (face, front, back);
++            (st.offset_front, st.offset_back) = (offset_front, offset_back);
++        }
++        Call::SetAlphaTest => {
++            let (e, f, r) = (a(0) != 0, a(1), farg(c, 0));
++            contexts.entry(*current).or_default().alpha_test = (e, f, r);
++        }
++        Call::SetShaderModeEx => {
++            let mode = a(0);
++            contexts.entry(*current).or_default().shader_mode = mode;
++        }
++        Call::SetRasterizerClipControlEx => {
++            let half = a(2) != 0;
++            contexts.entry(*current).or_default().half_z = half;
++        }
++        _ => return false,
++    }
++    true
++}
++
+ impl Gx2 {
+     /// Keeps the pipelines made under `root` (`<out>/cache` for a run; MH3U_GFX_CACHE_DIR puts it elsewhere, MH3U_GFX_PIPELINE_CACHE=off
+     /// turns it off), and starts making again, on the workers, those a run before made (see `pipelines.rs`).
+@@ -1053,166 +1229,42 @@ impl Gx2 {
+     }
+ 
+     /// Runs one call (or plays back a recorded one: `replay` is its stack).
+-    fn exec(&mut self, call: Call, c: &mut Ctx, g: &Guest, replay: Option<&[u32]>) {
++    pub(crate) fn exec(&mut self, call: Call, c: &mut Ctx, g: &Guest, replay: Option<&[u32]>) {
+         if false {
+             eprintln!("call {}{}", call.name(), if replay.is_some() { " (replayed)" } else { "" });
+         }
+         let a = |n: usize| arg(c, g, replay, n);
+         match call {
+-            Call::SetupContextStateEx => {
+-                self.contexts.insert(c.r[3], State::default());
+-                self.current = c.r[3];
+-            }
+-            Call::SetContextState => self.current = c.r[3],
+-            Call::SetVertexShader => {
+-                let v = a(0);
+-                if false {
+-                    eprintln!("  vertex shader {v:#x}");
+-                }
+-                self.state().vertex_shader = v;
+-            }
+-            Call::SetPrimitiveRestartIndex => {
+-                let v = a(0);
+-                self.state().restart_index = Some(v);
+-            }
+-            Call::SetPixelShader => {
+-                let v = a(0);
+-                if false {
+-                    eprintln!("  pixel shader {v:#x}");
+-                }
+-                self.state().pixel_shader = v;
+-            }
+-            Call::SetGeometryShader => {
+-                let v = a(0);
+-                self.state().geometry_shader = v;
+-            }
+-            Call::SetFetchShader => {
+-                let v = a(0);
+-                self.state().fetch_shader = v;
+-            }
+-            Call::SetAttribBuffer => {
+-                let (i, size, stride, address) = (a(0), a(1), a(2), a(3));
+-                if let Some(b) = self.state().attrib_buffers.get_mut(i as usize) {
+-                    *b = crate::state::AttribBuffer { address, size, stride };
+-                }
+-            }
+-            Call::SetVertexUniformBlock | Call::SetPixelUniformBlock | Call::SetGeometryUniformBlock => {
+-                let (i, size, address) = (a(0), a(1), a(2));
+-                let st = self.state();
+-                let blocks = if call == Call::SetVertexUniformBlock {
+-                    &mut st.vertex_blocks
+-                } else if call == Call::SetGeometryUniformBlock {
+-                    &mut st.geometry_blocks
+-                } else {
+-                    &mut st.pixel_blocks
+-                };
+-                if let Some(b) = blocks.get_mut(i as usize) {
+-                    *b = crate::state::UniformBlock { address, size };
+-                }
+-            }
+-            Call::SetPixelTexture => {
+-                let (t, unit) = (a(0), a(1));
+-                if let Some(slot) = self.state().pixel_textures.get_mut(unit as usize) {
+-                    *slot = t;
+-                }
+-            }
+-            Call::SetPixelSampler => {
+-                let (s, unit) = (a(0), a(1));
+-                if let Some(slot) = self.state().pixel_samplers.get_mut(unit as usize) {
+-                    *slot = s;
+-                }
+-            }
+-            Call::SetColorBuffer => {
+-                let (cb, target) = (a(0), a(1));
+-                if let Some(slot) = self.state().colour_buffers.get_mut(target as usize) {
+-                    *slot = cb;
+-                }
+-            }
+-            Call::SetDepthBuffer => {
+-                let v = a(0);
+-                self.state().depth_buffer = v;
+-            }
+-            Call::SetViewport => {
+-                let v = [farg(c, 0), farg(c, 1), farg(c, 2), farg(c, 3), farg(c, 4), farg(c, 5)];
+-                self.state().viewport = v;
+-            }
+-            Call::SetScissor => {
+-                let v = [a(0), a(1), a(2), a(3)];
+-                self.state().scissor = v;
+-            }
+-            Call::SetBlendControl => {
+-                let t = a(0) as usize;
+-                let b = crate::state::Blend {
+-                    colour_src: a(1),
+-                    colour_dst: a(2),
+-                    colour_op: a(3),
+-                    separate_alpha: a(4) != 0,
+-                    alpha_src: a(5),
+-                    alpha_dst: a(6),
+-                    alpha_op: a(7),
+-                };
+-                if let Some(slot) = self.state().blend.get_mut(t) {
+-                    *slot = b;
+-                }
+-            }
+-            Call::SetColorControl => {
+-                let v = [a(0), a(1), a(2), a(3)];
+-                self.state().colour_control = v;
+-            }
+-            Call::SetTargetChannelMasks => {
+-                let mut m = 0;
+-                for k in 0..8 {
+-                    m |= (a(k) & 0xf) << (4 * k);
+-                }
+-                self.state().target_masks = m;
+-            }
+-            Call::SetDepthOnlyControl => {
+-                let (t, w, f) = (a(0) != 0, a(1) != 0, a(2));
+-                let st = self.state();
+-                (st.depth_test, st.depth_write, st.depth_func, st.stencil_test) = (t, w, f, false);
+-            }
+-            Call::SetDepthStencilControl => {
+-                let (t, w, f, s) = (a(0) != 0, a(1) != 0, a(2), a(3) != 0);
+-                // front: comparison, pass, depth fail, fail; then the same for back faces (the arguments' order)
+-                let (back_enabled, front, back) = (a(4) != 0, [a(5), a(8), a(7), a(6)], [a(9), a(12), a(11), a(10)]);
+-                let st = self.state();
+-                (st.depth_test, st.depth_write, st.depth_func, st.stencil_test) = (t, w, f, s);
+-                (st.stencil.back_enabled, st.stencil.front, st.stencil.back) = (back_enabled, front, back);
+-            }
+-            Call::SetStencilMask => {
+-                let masks = std::array::from_fn(|k| a(k) & 0xff);
+-                self.state().stencil.masks = Some(masks);
+-            }
+-            Call::SetPolygonOffset => {
+-                let offset = std::array::from_fn(|k| farg(c, k));
+-                self.state().polygon_offset = offset;
+-            }
+-            Call::SetCullOnlyControl => {
+-                // GX2 writes the whole of PA_SU_SC_MODE_CNTL here, as GX2SetPolygonControl with no polygon modes and no polygon
+-                // offset: a draw after it has no depth bias until GX2SetPolygonControl turns it on again
+-                let (face, front, back) = (a(0), a(1) != 0, a(2) != 0);
+-                let st = self.state();
+-                (st.front_face, st.cull_front, st.cull_back) = (face, front, back);
+-                (st.offset_front, st.offset_back) = (false, false);
+-            }
+-            Call::SetPolygonControl => {
+-                let (face, front, back) = (a(0), a(1) != 0, a(2) != 0);
+-                let (offset_front, offset_back) = (a(6) != 0, a(7) != 0);
+-                let st = self.state();
+-                (st.front_face, st.cull_front, st.cull_back) = (face, front, back);
+-                (st.offset_front, st.offset_back) = (offset_front, offset_back);
+-            }
+-            Call::SetAlphaTest => {
+-                let (e, f, r) = (a(0) != 0, a(1), farg(c, 0));
+-                self.state().alpha_test = (e, f, r);
+-            }
+-            Call::SetShaderModeEx => {
+-                let mode = a(0);
+-                self.state().shader_mode = mode;
+-            }
++            Call::SetupContextStateEx |
++            Call::SetContextState |
++            Call::SetVertexShader |
++            Call::SetPrimitiveRestartIndex |
++            Call::SetPixelShader |
++            Call::SetGeometryShader |
++            Call::SetFetchShader |
++            Call::SetAttribBuffer |
++            Call::SetVertexUniformBlock |
++            Call::SetPixelUniformBlock |
++            Call::SetGeometryUniformBlock |
++            Call::SetPixelTexture |
++            Call::SetPixelSampler |
++            Call::SetColorBuffer |
++            Call::SetDepthBuffer |
++            Call::SetViewport |
++            Call::SetScissor |
++            Call::SetBlendControl |
++            Call::SetColorControl |
++            Call::SetTargetChannelMasks |
++            Call::SetDepthOnlyControl |
++            Call::SetDepthStencilControl |
++            Call::SetStencilMask |
++            Call::SetPolygonOffset |
++            Call::SetCullOnlyControl |
++            Call::SetPolygonControl |
++            Call::SetAlphaTest |
++            Call::SetShaderModeEx |
+             Call::SetRasterizerClipControlEx => {
+-                let half = a(2) != 0;
+-                self.state().half_z = half;
++                apply_state_call(&mut self.contexts, &mut self.current, call, c, &a);
+             }
+             // the size of the code the fetch shader would be: sixteen bytes for each attribute and a little control flow
+             Call::CalcFetchShaderSizeEx => c.r[3] = (32 + 16 * c.r[3]).div_ceil(16) * 16,
+@@ -1228,6 +1280,9 @@ impl Gx2 {
+             // next time
+             Call::Invalidate => {
+                 let (mode, address, size) = (a(0), a(1), a(2));
++                if crate::reads::enabled() {
++                    crate::reads::invalidated(address, size);
++                }
+                 let started = self.perf.on.then(Instant::now);
+                 if mode & 2 != 0 || mode & 0x40 != 0 {
+                     self.invalidate_textures(address, size);
+@@ -1409,7 +1464,16 @@ impl Gx2 {
+ 
+     fn draw(&mut self, g: &Guest, primitive: u32, count: u32, indexed: Option<(u32, u32)>, offset: u32, instances: u32) {
+         self.draws += 1;
+-        if !self.diag.per_draw() {
++        if crate::reads::enabled() {
++            mh3u_rt::log_reads(true);
++            let _ = mh3u_rt::take_reads();
++            self.draw_call(g, primitive, count, indexed, offset, instances);
++            let reads = mh3u_rt::take_reads();
++            let st = self.state().clone();
++            mh3u_rt::log_reads(false);
++            crate::reads::note(g, &st, indexed, count, &reads);
++            mh3u_rt::log_reads(true);
++        } else if !self.diag.per_draw() {
+             self.draw_call(g, primitive, count, indexed, offset, instances);
+         } else {
+             self.diag.draw();
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index 9e0773f..f25c1de 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -8,6 +8,7 @@ pub mod events;
+ mod fsr;
+ mod fxmap;
+ mod geometry;
++mod front;
+ mod gx2;
+ pub mod icon;
+ pub mod kbm;
+@@ -15,7 +16,9 @@ mod lost;
+ pub mod overlay;
+ mod perf;
+ mod pipelines;
++mod mirror;
+ mod queue;
++mod reads;
+ mod report;
+ pub mod settings;
+ mod shader_cache;
+@@ -23,6 +26,7 @@ mod state;
+ mod texture;
+ mod translations;
+ 
++pub use front::{Mode, backend, mode_from_env};
+ pub use gx2::Gx2;
+ 
+ /// The commit this build was made from ("+changes" when the working tree differed), printed at start and written into frame dumps.
+diff --git a/crates/mh3u-gfx/src/mirror.rs b/crates/mh3u-gfx/src/mirror.rs
+new file mode 100644
+index 0000000..a8415e5
+--- /dev/null
++++ b/crates/mh3u-gfx/src/mirror.rs
+@@ -0,0 +1,301 @@
++//! A copy of the guest's memory that the draws are worked out from, kept by messages in order.
++//!
++//! The thread that works out the draws (`front.rs`) must read what the game's thread wrote, but the game's thread goes on and rewrites
++//! it. So the game's thread copies what a draw is going to read into the messages it sends (`Updates`), and the other thread applies
++//! them, in the order they were sent, to a second 4 GiB address space of its own (`Back`): when it works out a draw, that memory holds
++//! what the game's had when the draw was made. A page is copied the first time a draw reads it and again only after `GX2Invalidate`
++//! covers it: the game announces what its code writes for the GPU to read (the read log found no write that was not announced in the
++//! village and the house, see `PerformanceUpdate.md`).
++
++use mh3u_rt::{Guest, GuestMemory};
++use std::sync::{Arc, Mutex};
++
++const PAGES: usize = 1 << 20;
++/// Slots of the table of what was copied in the current stretch.
++const DONE: usize = 8192;
++const PAGE: u32 = 4096;
++
++/// Pages to put in the copy: runs of (first page, pages), and their bytes one after the other.
++#[derive(Default)]
++pub(crate) struct Updates {
++    pub runs: Vec<(u32, u32)>,
++    pub data: Vec<u8>,
++    /// Exact ranges (address, bytes) that go in after the pages, their bytes in `fresh_data`: for what changes without being announced.
++    pub fresh: Vec<(u32, u32)>,
++    pub fresh_data: Vec<u8>,
++}
++
++impl Updates {
++    fn is_empty(&self) -> bool {
++        self.runs.is_empty() && self.fresh.is_empty()
++    }
++
++    fn clear(&mut self) {
++        self.runs.clear();
++        self.data.clear();
++        self.fresh.clear();
++        self.fresh_data.clear();
++    }
++}
++
++/// Updates the other thread has applied, given back with their buffers: making a message's buffers anew (and the pages they are written
++/// into, which the system has to give zeroed) for each of the thousands of messages a frame cost more than copying what they carry.
++#[derive(Clone, Default)]
++pub(crate) struct Pool(Arc<Mutex<Vec<Box<Updates>>>>);
++
++impl Pool {
++    /// How many are kept: more than the messages in flight at once, which the channel and the frames ahead bound.
++    const KEPT: usize = 4096;
++
++    fn get(&self) -> Box<Updates> {
++        self.0.lock().unwrap().pop().unwrap_or_default()
++    }
++
++    pub(crate) fn give(&self, mut u: Box<Updates>) {
++        u.clear();
++        // a buffer that grew far beyond what messages usually carry is let go rather than kept
++        if u.data.capacity() > 8 << 20 || u.fresh_data.capacity() > 8 << 20 {
++            return;
++        }
++        let mut kept = self.0.lock().unwrap();
++        if kept.len() < Self::KEPT {
++            kept.push(u);
++        }
++    }
++}
++
++/// The game's thread's side: which pages the other thread's copy holds up to date.
++pub(crate) struct Front {
++    valid: Vec<u64>,
++    /// The pages copied for shaders (what a blanket shader invalidation drops).
++    tagged: Vec<u64>,
++    /// The same pages as a list, so that dropping them does not walk the whole table.
++    tagged_pages: Vec<u32>,
++    pending: Box<Updates>,
++    pool: Pool,
++    /// What the game's code has done since: bumped each time the game calls into the graphics, since its code runs between those calls and
++    /// may write anything. Within one stretch (a display list played back, whose draws follow each other with no game code between) the
++    /// memory does not change, so an exact range copied once in it need not be copied again.
++    epoch: u32,
++    /// The last (address, bytes, stretch) copied, by a hash of the first two: a collision only means copying once more.
++    done: Vec<(u32, u32, u32)>,
++    /// Bytes copied, for the report.
++    pub copied: u64,
++}
++
++impl Front {
++    pub(crate) fn new() -> Front {
++        Front {
++            valid: vec![0; PAGES / 64],
++            tagged: vec![0; PAGES / 64],
++            tagged_pages: Vec::new(),
++            pending: Box::default(),
++            pool: Pool::default(),
++            epoch: 1,
++            done: vec![(0, 0, 0); DONE],
++            copied: 0,
++        }
++    }
++
++    /// The game's code may have run since the last copy: copies made before no longer stand for the memory.
++    pub(crate) fn new_stretch(&mut self) {
++        self.epoch = self.epoch.wrapping_add(1).max(1);
++    }
++
++    /// Where the other thread gives the updates back.
++    pub(crate) fn pool(&self) -> Pool {
++        self.pool.clone()
++    }
++
++    /// Makes sure the copy will hold the `len` bytes at `address` as they are now.
++    pub(crate) fn ensure(&mut self, g: &Guest, address: u32, len: u32, tag: bool) {
++        if len == 0 {
++            return;
++        }
++        let first = (address / PAGE) as usize;
++        let last = (((u64::from(address) + u64::from(len) - 1) / u64::from(PAGE)) as usize).min(PAGES - 1);
++        let mut page = first;
++        while page <= last {
++            let (word, bit) = (page / 64, page % 64);
++            if bit == 0 && self.valid[word] == u64::MAX && page + 63 <= last && !tag {
++                page += 64;
++                continue;
++            }
++            if tag && self.tagged[word] >> bit & 1 == 0 {
++                self.tagged[word] |= 1 << bit;
++                self.tagged_pages.push(page as u32);
++            }
++            if self.valid[word] >> bit & 1 == 0 {
++                self.valid[word] |= 1 << bit;
++                g.with_bytes((page as u32) << 12, PAGE as usize, |raw| self.pending.data.extend_from_slice(raw));
++                self.copied += u64::from(PAGE);
++                match self.pending.runs.last_mut() {
++                    Some((start, n)) if (*start + *n) as usize == page => *n += 1,
++                    _ => self.pending.runs.push((page as u32, 1)),
++                }
++            }
++            page += 1;
++        }
++    }
++
++    /// Copies the `len` bytes at `address` as they are now, whatever the copy holds: for structures the game changes without saying so.
++    pub(crate) fn fresh(&mut self, g: &Guest, address: u32, len: u32) {
++        if len == 0 {
++            return;
++        }
++        let slot = ((address.wrapping_mul(0x9E37_79B1) ^ len.wrapping_mul(0x85EB_CA6B)) >> 19) as usize % DONE;
++        if self.done[slot] == (address, len, self.epoch) {
++            return;
++        }
++        self.done[slot] = (address, len, self.epoch);
++        g.with_bytes(address, len as usize, |raw| self.pending.fresh_data.extend_from_slice(raw));
++        self.pending.fresh.push((address, len));
++        self.copied += u64::from(len);
++    }
++
++    /// The game announced it wrote `size` bytes at `address`: the pages are copied again when next wanted.
++    pub(crate) fn invalidate(&mut self, address: u32, size: u32) {
++        let first = (address / PAGE) as usize;
++        let last = (((u64::from(address) + u64::from(size.max(1)) - 1) / u64::from(PAGE)) as usize).min(PAGES - 1);
++        for page in first..=last {
++            self.valid[page / 64] &= !(1 << (page % 64));
++        }
++    }
++
++    /// A blanket invalidation of shaders (the whole address space, which says nothing of where): the pages copied for shaders are
++    /// copied again when next wanted.
++    pub(crate) fn invalidate_shaders(&mut self) {
++        for page in self.tagged_pages.drain(..) {
++            let (word, bit) = (page as usize / 64, page % 64);
++            self.valid[word] &= !(1 << bit);
++            self.tagged[word] &= !(1 << bit);
++        }
++    }
++
++    /// What is to go with the next message.
++    pub(crate) fn take(&mut self) -> Option<Box<Updates>> {
++        if self.pending.is_empty() {
++            return None;
++        }
++        let next = self.pool.get();
++        Some(std::mem::replace(&mut self.pending, next))
++    }
++}
++
++/// The other thread's side: the copy itself.
++pub(crate) struct Back {
++    memory: GuestMemory,
++}
++
++impl Back {
++    pub(crate) fn new() -> anyhow::Result<Back> {
++        Ok(Back {
++            memory: GuestMemory::reserve()?,
++        })
++    }
++
++    pub(crate) fn guest(&mut self) -> Guest {
++        Guest::new(self.memory.as_mut_ptr())
++    }
++
++    pub(crate) fn apply(&mut self, u: &Updates) {
++        let g = self.guest();
++        let mut at = 0usize;
++        for &(first, pages) in &u.runs {
++            let len = pages as usize * PAGE as usize;
++            g.write(first << 12, &u.data[at..at + len]);
++            at += len;
++        }
++        let mut at = 0usize;
++        for &(address, len) in &u.fresh {
++            g.write(address, &u.fresh_data[at..at + len as usize]);
++            at += len as usize;
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn pages_are_copied_once_until_invalidated_and_arrive_in_order() {
++        let mut game = GuestMemory::reserve().unwrap();
++        let live = Guest::new(game.as_mut_ptr());
++        let mut front = Front::new();
++        let mut back = Back::new().unwrap();
++        live.put_u32(0x1000_0004, 0x1111);
++        live.put_u32(0x1000_1008, 0x2222);
++        front.ensure(&live, 0x1000_0000, 0x1800, false);
++        let first = front.take().expect("two pages");
++        assert_eq!(first.runs, [(0x10000, 2)]);
++        // nothing new until something is invalidated
++        front.ensure(&live, 0x1000_0000, 0x1800, false);
++        assert!(front.take().is_none());
++        // the game writes and announces it; the page is sent again, and only that one
++        live.put_u32(0x1000_1008, 0x3333);
++        front.invalidate(0x1000_1000, 8);
++        front.ensure(&live, 0x1000_0000, 0x1800, false);
++        let second = front.take().expect("one page");
++        assert_eq!(second.runs, [(0x10001, 1)]);
++        // the back sees what the game had at each step, in order
++        let copy = back.guest();
++        back.apply(&first);
++        assert_eq!((copy.u32(0x1000_0004), copy.u32(0x1000_1008)), (0x1111, 0x2222));
++        back.apply(&second);
++        assert_eq!((copy.u32(0x1000_0004), copy.u32(0x1000_1008)), (0x1111, 0x3333));
++    }
++
++    #[test]
++    fn an_exact_range_is_copied_once_in_a_stretch_and_again_in_the_next() {
++        let mut game = GuestMemory::reserve().unwrap();
++        let live = Guest::new(game.as_mut_ptr());
++        let mut front = Front::new();
++        live.put_u32(0x1000_0000, 7);
++        front.fresh(&live, 0x1000_0000, 16);
++        front.fresh(&live, 0x1000_0000, 16);
++        // another length at the same address is another range
++        front.fresh(&live, 0x1000_0000, 8);
++        let first = front.take().expect("copies");
++        assert_eq!(first.fresh, [(0x1000_0000, 16), (0x1000_0000, 8)], "the repeat was left out");
++        // the game's code runs between calls: what it may have written has to be copied again
++        live.put_u32(0x1000_0000, 9);
++        front.new_stretch();
++        front.fresh(&live, 0x1000_0000, 16);
++        let second = front.take().expect("copied again");
++        assert_eq!(second.fresh, [(0x1000_0000, 16)]);
++        assert_eq!(&second.fresh_data[..4], &9u32.to_be_bytes());
++    }
++
++    #[test]
++    fn a_blanket_shader_invalidation_drops_only_the_pages_copied_for_shaders() {
++        let mut game = GuestMemory::reserve().unwrap();
++        let live = Guest::new(game.as_mut_ptr());
++        let mut front = Front::new();
++        front.ensure(&live, 0x2000_0000, 0x1000, true);
++        front.ensure(&live, 0x2000_1000, 0x1000, false);
++        assert_eq!(front.take().expect("two pages").runs, [(0x20000, 2)]);
++        front.invalidate_shaders();
++        front.ensure(&live, 0x2000_0000, 0x2000, false);
++        // the shader page comes again, the other (not a shader's) stays as it was
++        assert_eq!(front.take().expect("one page").runs, [(0x20000, 1)]);
++        // and a page not copied for shaders is not dropped later either
++        front.invalidate_shaders();
++        front.ensure(&live, 0x2000_0000, 0x2000, false);
++        assert!(front.take().is_none());
++    }
++
++    #[test]
++    fn updates_given_back_come_out_empty_and_are_used_again() {
++        let pool = Pool::default();
++        let mut u = Box::<Updates>::default();
++        u.runs.push((1, 1));
++        u.data.extend_from_slice(&[1; 4096]);
++        u.fresh.push((4, 4));
++        u.fresh_data.extend_from_slice(&[2; 4]);
++        pool.give(u);
++        let again = pool.get();
++        assert!(again.is_empty() && again.data.is_empty() && again.fresh_data.is_empty());
++        assert!(again.data.capacity() >= 4096, "the buffer is kept");
++    }
++}
+diff --git a/crates/mh3u-gfx/src/perf.rs b/crates/mh3u-gfx/src/perf.rs
+index be76841..7e8a18e 100644
+--- a/crates/mh3u-gfx/src/perf.rs
++++ b/crates/mh3u-gfx/src/perf.rs
+@@ -353,6 +353,7 @@ impl Perf {
+                 w.invalidate_time.as_secs_f64() * 1000.0 / per
+             ));
+             out.extend(gpu_text());
++            out.extend(crate::reads::text(u64::from(w.frames)));
+             let threads = mh3u_rt::thread_cpu_times();
+             // the first window only takes the starting point: the threads' times so far cover the whole run, not this window
+             if !self.threads.is_empty() {
+diff --git a/crates/mh3u-gfx/src/reads.rs b/crates/mh3u-gfx/src/reads.rs
+new file mode 100644
+index 0000000..e0b2327
+--- /dev/null
++++ b/crates/mh3u-gfx/src/reads.rs
+@@ -0,0 +1,162 @@
++//! A measuring aid (`MH3U_GFX_READLOG=1`): which parts of the guest's memory each draw reads while its resources are worked out, sorted
++//! by what the draw's state says they are (the shaders' structures, the textures', the vertex buffers, the uniform blocks...). It tells
++//! what a copy of "everything a draw reads" would hold and what it would cost, for moving that work to another thread.
++
++use crate::state::State;
++use mh3u_rt::Guest;
++use std::collections::HashMap;
++use std::sync::Mutex;
++use std::sync::atomic::{AtomicU64, Ordering};
++
++/// A mirror of the pages the draws read, to check whether `GX2Invalidate` is enough to know when they changed: a page is copied the
++/// first time it is read and dropped when an invalidation covers it; a later read whose bytes differ from the copy is a write the game
++/// did not announce.
++static MIRROR: Mutex<Option<HashMap<u32, Box<[u8; 4096]>>>> = Mutex::new(None);
++static STALE: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
++static STALE_BYTES: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
++static FIRST: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
++static CHECKED: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
++
++/// An invalidation of `size` bytes at `address`: the mirror forgets those pages.
++pub(crate) fn invalidated(address: u32, size: u32) {
++    if let Some(m) = MIRROR.lock().unwrap().as_mut() {
++        let first = address >> 12;
++        let last = (u64::from(address) + u64::from(size.max(1)) - 1) >> 12;
++        if last - u64::from(first) > 4096 {
++            m.retain(|&p, _| p < first || u64::from(p) > last);
++        } else {
++            for p in first..=(last as u32) {
++                m.remove(&p);
++            }
++        }
++    }
++}
++
++fn check(g: &Guest, category: usize, address: u32, len: u32) {
++    let mut guard = MIRROR.lock().unwrap();
++    let m = guard.get_or_insert_with(HashMap::new);
++    let end = u64::from(address) + u64::from(len.max(1));
++    let mut page = address >> 12;
++    while u64::from(page) << 12 < end {
++        let (from, to) = (address.max(page << 12), (end.min((u64::from(page) + 1) << 12)) as u32);
++        let (a, n) = (from, (to - from) as usize);
++        let mut live = vec![0u8; n];
++        g.read_unlogged(a, &mut live);
++        match m.get(&page) {
++            Some(copy) => {
++                CHECKED[category].fetch_add(n as u64, Ordering::Relaxed);
++                let off = (a & 0xfff) as usize;
++                if copy[off..off + n] != live[..] {
++                    STALE[category].fetch_add(1, Ordering::Relaxed);
++                    STALE_BYTES[category].fetch_add(n as u64, Ordering::Relaxed);
++                    // what the game changed is what the draw reads now
++                    let mut whole = Box::new([0u8; 4096]);
++                    g.read_unlogged(page << 12, &mut whole[..]);
++                    m.insert(page, whole);
++                }
++            }
++            None => {
++                FIRST[category].fetch_add(1, Ordering::Relaxed);
++                let mut whole = Box::new([0u8; 4096]);
++                g.read_unlogged(page << 12, &mut whole[..]);
++                m.insert(page, whole);
++            }
++        }
++        page += 1;
++    }
++}
++
++const NAMES: [&str; 13] = [
++    "vertex shader struct",
++    "pixel shader struct",
++    "geometry shader struct",
++    "fetch shader",
++    "texture structs",
++    "sampler structs",
++    "colour buffer structs",
++    "depth buffer struct",
++    "vertex buffers",
++    "uniform blocks",
++    "index buffer",
++    "other (reached by pointer)",
++    "state-less reads",
++];
++
++static CALLS: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
++static BYTES: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
++static DRAWS: AtomicU64 = AtomicU64::new(0);
++/// The biggest "other" read of the window, to see what it is.
++static BIGGEST: AtomicU64 = AtomicU64::new(0);
++
++pub(crate) fn enabled() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("MH3U_GFX_READLOG").is_some())
++}
++
++/// Sorts the reads of one draw by what they are.
++pub(crate) fn note(g: &Guest, st: &State, indexed: Option<(u32, u32)>, count: u32, reads: &[(u32, u32)]) {
++    let mut regions: Vec<(usize, u32, u32)> = vec![
++        (0, st.vertex_shader, 0x140),
++        (1, st.pixel_shader, 0xe8),
++        (2, st.geometry_shader, 0x140),
++        (3, st.fetch_shader, 0x40),
++        (7, st.depth_buffer, 0x80),
++    ];
++    regions.extend(st.pixel_textures.iter().map(|&a| (4, a, 0x100)));
++    regions.extend(st.pixel_samplers.iter().map(|&a| (5, a, 0x10)));
++    regions.extend(st.colour_buffers.iter().map(|&a| (6, a, 0x80)));
++    regions.extend(st.attrib_buffers.iter().map(|b| (8, b.address, b.size)));
++    for blocks in [&st.vertex_blocks, &st.pixel_blocks, &st.geometry_blocks] {
++        regions.extend(blocks.iter().map(|b| (9, b.address, b.size)));
++    }
++    if let Some((kind, address)) = indexed {
++        let width = if matches!(kind, 1 | 9) { 4 } else { 2 };
++        regions.push((10, address, count.saturating_mul(width)));
++    }
++    DRAWS.fetch_add(1, Ordering::Relaxed);
++    for &(address, len) in reads {
++        let category = regions
++            .iter()
++            .find(|&&(_, start, size)| start != 0 && address >= start && address - start < size.max(1))
++            .map_or(11, |r| r.0);
++        check(g, category, address, len);
++        CALLS[category].fetch_add(1, Ordering::Relaxed);
++        BYTES[category].fetch_add(u64::from(len), Ordering::Relaxed);
++        if category == 11 {
++            BIGGEST.fetch_max(u64::from(len), Ordering::Relaxed);
++        }
++    }
++}
++
++/// The `[gfx reads]` lines of the draws since the last call.
++pub(crate) fn text(frames: u64) -> Vec<String> {
++    let draws = DRAWS.swap(0, Ordering::Relaxed);
++    if draws == 0 {
++        return Vec::new();
++    }
++    let per = frames.max(1) as f64;
++    let mut out = vec![format!("[gfx reads] {draws} draws ({:.0} a frame); per frame: reads, bytes", draws as f64 / per)];
++    let mut total = 0;
++    for i in 0..13 {
++        let (c, b) = (CALLS[i].swap(0, Ordering::Relaxed), BYTES[i].swap(0, Ordering::Relaxed));
++        total += b;
++        if c > 0 {
++            out.push(format!(
++                "[gfx reads]   {:28} {:8.0} reads {:10.0} bytes; mirror: {} pages first seen, {} bytes compared, {} reads found changed without an invalidation ({} bytes)",
++                NAMES[i],
++                c as f64 / per,
++                b as f64 / per,
++                FIRST[i].swap(0, Ordering::Relaxed),
++                CHECKED[i].swap(0, Ordering::Relaxed),
++                STALE[i].swap(0, Ordering::Relaxed),
++                STALE_BYTES[i].swap(0, Ordering::Relaxed)
++            ));
++        }
++    }
++    out.push(format!(
++        "[gfx reads]   total {:.0} bytes a frame; biggest single read reached by pointer {} bytes",
++        total as f64 / per,
++        BIGGEST.swap(0, Ordering::Relaxed)
++    ));
++    out
++}
+diff --git a/crates/mh3u-rt/src/guest.rs b/crates/mh3u-rt/src/guest.rs
+index 48fa342..d07241e 100644
+--- a/crates/mh3u-rt/src/guest.rs
++++ b/crates/mh3u-rt/src/guest.rs
+@@ -12,6 +12,30 @@ fn watched(address: u32, len: u32, what: &str) {
+     }
+ }
+ 
++/// Whether reads through [`Guest`] are being logged (a measuring aid for the graphics code; see `log_reads`).
++static LOGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++thread_local! {
++    static READS: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
++}
++
++/// Starts (or stops) logging the reads made through [`Guest`] by any thread, as (address, bytes), in the thread that made them.
++pub fn log_reads(on: bool) {
++    LOGGING.store(on, std::sync::atomic::Ordering::Relaxed);
++}
++
++/// The reads this thread made since the last call, oldest first.
++pub fn take_reads() -> Vec<(u32, u32)> {
++    READS.with(|r| std::mem::take(&mut *r.borrow_mut()))
++}
++
++#[inline]
++fn logged(address: u32, len: usize) {
++    if LOGGING.load(std::sync::atomic::Ordering::Relaxed) {
++        READS.with(|r| r.borrow_mut().push((address, len as u32)));
++    }
++}
++
+ /// A view of the guest's address space (a reserved range of 4 GiB with guest address 0 at `base`).
+ #[derive(Clone, Copy)]
+ pub struct Guest {
+@@ -40,15 +64,23 @@ impl Guest {
+ 
+     /// Copies `out.len()` bytes from the guest. The caller keeps `address + len` below 4 GiB.
+     pub fn read(&self, address: u32, out: &mut [u8]) {
++        logged(address, out.len());
+         debug_assert!(u64::from(address) + out.len() as u64 <= 1 << 32);
+         // SAFETY: inside the reserved range (checked above in debug builds, by the caller otherwise); `out` is a host buffer
+         unsafe { std::ptr::copy_nonoverlapping(self.at(address), out.as_mut_ptr(), out.len()) }
+     }
+ 
++    /// [`Guest::read`] that the read log does not see (for the log's own checks).
++    pub fn read_unlogged(&self, address: u32, out: &mut [u8]) {
++        // SAFETY: as `read`
++        unsafe { std::ptr::copy_nonoverlapping(self.at(address), out.as_mut_ptr(), out.len()) }
++    }
++
+     /// Calls `f` with the `len` bytes at `address` in place, without copying them (for hashing or comparing guest memory). The caller
+     /// keeps `address + len` below 4 GiB. Nothing writes guest memory meanwhile: only the thread holding the baton runs the game's code,
+     /// and it is the one in here.
+     pub fn with_bytes<R>(&self, address: u32, len: usize, f: impl FnOnce(&[u8]) -> R) -> R {
++        logged(address, len);
+         debug_assert!(u64::from(address) + len as u64 <= 1 << 32);
+         // SAFETY: inside the reserved range (as for `read`), and not written while `f` runs (above); the slice does not outlive `f`
+         f(unsafe { std::slice::from_raw_parts(self.at(address), len) })
+@@ -77,6 +109,7 @@ impl Guest {
+     }
+ 
+     pub fn u8(&self, address: u32) -> u8 {
++        logged(address, 1);
+         let mut b = [0];
+         self.read(address, &mut b);
+         b[0]
+@@ -88,6 +121,7 @@ impl Guest {
+     }
+ 
+     pub fn u16(&self, address: u32) -> u16 {
++        logged(address, 2);
+         let mut b = [0; 2];
+         self.read(address, &mut b);
+         u16::from_be_bytes(b)
+@@ -99,6 +133,7 @@ impl Guest {
+     }
+ 
+     pub fn u32(&self, address: u32) -> u32 {
++        logged(address, 4);
+         let mut b = [0; 4];
+         self.read(address, &mut b);
+         u32::from_be_bytes(b)
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index 27ca167..b5a3468 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -20,6 +20,14 @@ pub fn new_test_ctx() -> Ctx {
+ pub mod input;
+ mod kernel;
+ mod memory;
++pub use memory::GuestMemory;
++
++/// A value that is handed to another thread although it holds a raw pointer, for the graphics (which may not have `unsafe` code): the
++/// pointer is never used there (the guest-memory pointer of a `Ctx` the graphics take their registers from), or the value is used by
++/// one thread at a time.
++pub struct AssertSend<T>(pub T);
++// SAFETY: the caller of `AssertSend` promises what is above
++unsafe impl<T> Send for AssertSend<T> {}
+ pub mod menu_probe;
+ pub mod mods;
+ pub mod native_menu;
+@@ -31,7 +39,7 @@ mod sync;
+ 
+ pub use fs::Roots;
+ pub use game::{DataImport, Options, Report, run};
+-pub use guest::Guest;
++pub use guest::{Guest, log_reads, take_reads};
+ 
+ /// The registers of a core, laid out as the translated C's `Ctx` (`ppc.h`); the library's size for it is checked when it is loaded.
+ #[repr(C)]
+diff --git a/crates/mh3u-rt/src/scene.rs b/crates/mh3u-rt/src/scene.rs
+index 5c5e175..7478c2f 100644
+--- a/crates/mh3u-rt/src/scene.rs
++++ b/crates/mh3u-rt/src/scene.rs
+@@ -131,8 +131,19 @@ pub fn areas(g: &Guest) -> Vec<u32> {
+         .collect()
+ }
+ 
+-/// Called at each frame swap: reads the areas and logs a change of scene.
++/// Called at each frame swap: reads the areas and logs a change of scene. Every eighth frame only: each read asks the system whether a
++/// page has been touched (some sixty queries), which showed as several percent of the game's thread, and a scene lasts far longer than
++/// eight frames.
+ pub(crate) fn on_frame(g: &Guest) {
++    static FRAMES: AtomicU32 = AtomicU32::new(0);
++    if FRAMES.fetch_add(1, Relaxed) % 8 != 0 {
++        return;
++    }
++    refresh(g);
++}
++
++/// Reads the areas now and logs a change of scene.
++fn refresh(g: &Guest) {
+     let found = areas(g);
+     let Some((now, by)) = decide(&found) else { return };
+     if SCENE.swap(to_u8(now), Relaxed) != to_u8(now) || DECIDED_BY.swap(by, Relaxed) != by {
+@@ -173,10 +184,10 @@ mod tests {
+         g.put_u32(area + COUNT, 1);
+         assert!(areas(&g).is_empty(), "past the count: stale");
+         g.put_u32(area + COUNT, 2);
+-        on_frame(&g);
++        refresh(&g);
+         assert_eq!(scene(), Scene::Title);
+         g.put_u32(vtable + GET_DTI_SLOT, 0x0202_831c);
+-        on_frame(&g);
++        refresh(&g);
+         assert_eq!(scene(), Scene::InGame);
+     }
+ }
+diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
+index 704663f..b9a6aae 100644
+--- a/crates/mh3u-tools/src/main.rs
++++ b/crates/mh3u-tools/src/main.rs
+@@ -985,7 +985,7 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
+         let mut gx2 = mh3u_gfx::Gx2::new(display);
+         gx2.use_cache_dir(&cache);
+         gx2.use_overlay(dump_base, mods_dir, save_dir);
+-        options.backend = Some(Box::new(gx2));
++        options.backend = Some(mh3u_gfx::backend(gx2, mh3u_gfx::mode_from_env()));
+         if let Err(e) = finish(options) {
+             eprintln!("{e:#}");
+         }
