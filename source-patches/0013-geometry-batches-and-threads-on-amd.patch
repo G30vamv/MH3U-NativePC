@@ -1,0 +1,146 @@
+diff --git a/crates/mh3u-gfx/src/draw.rs b/crates/mh3u-gfx/src/draw.rs
+index bb88d78..2e0406e 100644
+--- a/crates/mh3u-gfx/src/draw.rs
++++ b/crates/mh3u-gfx/src/draw.rs
+@@ -356,6 +356,26 @@ pub(crate) struct GroupKey {
+     entries: Vec<(u32, Bound)>,
+ }
+ 
++/// How many draws with a geometry shader one batch holds before it is handed to the GPU. Each of them records two compute passes and
++/// two buffer clears besides its own draw, and the interface of the equipment screens has some 300 in a row: all of that in one batch
++/// ended in a lost device on a Radeon RX 6600 and, with the GPU queue on its own thread, in memory that grew without end on AMD cards.
++/// Cut into batches of this size neither happens (`MH3U_GFX_GS_BATCH=<n>` changes it, 0 turns the limit off).
++const GEOMETRY_DRAWS_PER_BATCH: u32 = 32;
++
++/// The limit set by `MH3U_GFX_GS_BATCH`: its value, no limit for 0, and the default for anything else.
++fn geometry_batch_limit(setting: Option<&str>) -> u32 {
++    match setting.and_then(|v| v.trim().parse::<u32>().ok()) {
++        Some(0) => u32::MAX,
++        Some(n) => n,
++        None => GEOMETRY_DRAWS_PER_BATCH,
++    }
++}
++
++fn geometry_draws_per_batch() -> u32 {
++    static N: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
++    *N.get_or_init(|| geometry_batch_limit(std::env::var("MH3U_GFX_GS_BATCH").ok().as_deref()))
++}
++
+ /// How many bind groups are kept before the cache is emptied (it is also pruned of the ones not used for a second, see `prune`).
+ const BIND_GROUP_LIMIT: usize = 16384;
+ 
+@@ -2945,6 +2965,12 @@ impl Gx2 {
+         }
+         pass.draw_indexed(0..index_count, 0, 0..if geo.is_some() { 1 } else { instances.max(1) });
+         lap.mark("pass");
++        if geo.is_some() {
++            self.batch.geometry_draws += 1;
++            if self.batch.geometry_draws >= geometry_draws_per_batch() {
++                self.flush_draws();
++            }
++        }
+     }
+ 
+     /// A part of an arena of at least `size` bytes (contents not defined).
+@@ -3079,6 +3105,7 @@ impl Gx2 {
+         for a in self.batch.arenas.iter_mut().flatten() {
+             a.used = 0;
+         }
++        self.batch.geometry_draws = 0;
+     }
+ }
+ 
+@@ -3434,6 +3461,8 @@ pub(crate) struct Batch {
+     slot_buffers: Vec<wgpu::Buffer>,
+     slots_used: usize,
+     slot_marks: Vec<u64>,
++    /// How many draws with a geometry shader the batch holds (see `GEOMETRY_DRAWS_PER_BATCH`).
++    geometry_draws: u32,
+ }
+ 
+ /// A big buffer that the small buffers of a batch of draws are cut from (one allocation instead of several per draw). Its parts are not
+@@ -3483,6 +3512,15 @@ type PassKey = (u32, Option<u32>, usize);
+ 
+ #[cfg(test)]
+ mod tests {
++    #[test]
++    fn the_geometry_batch_limit_comes_from_the_setting() {
++        assert_eq!(geometry_batch_limit(None), GEOMETRY_DRAWS_PER_BATCH);
++        assert_eq!(geometry_batch_limit(Some("8")), 8);
++        assert_eq!(geometry_batch_limit(Some(" 64 ")), 64);
++        assert_eq!(geometry_batch_limit(Some("0")), u32::MAX);
++        assert_eq!(geometry_batch_limit(Some("many")), GEOMETRY_DRAWS_PER_BATCH);
++    }
++
+     use super::*;
+ 
+     fn floats(v: [u32; 4]) -> [f32; 4] {
+diff --git a/crates/mh3u-gfx/src/front.rs b/crates/mh3u-gfx/src/front.rs
+index c6b4b2d..4ce61c9 100644
+--- a/crates/mh3u-gfx/src/front.rs
++++ b/crates/mh3u-gfx/src/front.rs
+@@ -43,10 +43,11 @@ pub fn mode_from_env() -> Option<Mode> {
+     }
+ }
+ 
+-/// Without a setting, only NVIDIA cards get the thread: on an integrated AMD card (limited by the GPU, not the CPU) it measured slower,
+-/// and the other makes are not measured yet.
++/// Without a setting, NVIDIA and AMD cards get the thread (on a Radeon RX 6600 and on the Radeon of a Ryzen it runs without freezes
++/// and the frame rate goes up by a fifth to a quarter once the batches of geometry draws are cut up, see `GEOMETRY_DRAWS_PER_BATCH`
++/// in `draw.rs`); the other makes are not measured yet.
+ fn default_mode(vendor: u32) -> Mode {
+-    if vendor == 0x10de { Mode::Thread } else { Mode::Off }
++    if vendor == 0x10de || vendor == 0x1002 { Mode::Thread } else { Mode::Off }
+ }
+ 
+ /// What the thread that draws is sent.
+diff --git a/crates/mh3u-gfx/src/queue.rs b/crates/mh3u-gfx/src/queue.rs
+index fec9a0d..912ec31 100644
+--- a/crates/mh3u-gfx/src/queue.rs
++++ b/crates/mh3u-gfx/src/queue.rs
+@@ -40,18 +40,21 @@ impl Deref for OrderedQueue {
+ 
+ /// NVIDIA's PCI vendor id.
+ const NVIDIA: u32 = 0x10DE;
++/// AMD's PCI vendor id.
++const AMD: u32 = 0x1002;
+ 
+-/// Whether the queue gets a thread of its own. `MH3U_GFX_THREAD=on` or `off` decides; without it only NVIDIA cards get one.
++/// Whether the queue gets a thread of its own. `MH3U_GFX_THREAD=on` or `off` decides; without it NVIDIA and AMD cards get one.
+ ///
+ /// On AMD cards (a Radeon RX 6600, and the Radeon inside a Ryzen, with Vulkan and with DX12) finishing the batches on another
+ /// thread than the one that recorded them made the driver hold on to gigabytes of memory, over a second or two, in screens with
+-/// many draws (the item box), until the device was lost for lack of memory. Cards that share the system's memory (Intel's) are
+-/// kept on the game's thread too until they are tried.
++/// many draws (the item box), until the device was lost for lack of memory. The cause was one batch holding hundreds of draws with
++/// a geometry shader (see `GEOMETRY_DRAWS_PER_BATCH` in `draw.rs`); with those batches cut up the memory stays flat, so AMD gets the
++/// thread too. Cards that share the system's memory (Intel's) are kept on the game's thread until they are tried.
+ pub fn thread_wanted(setting: Option<&str>, vendor: u32) -> bool {
+     match setting.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+         Some("on" | "1" | "true") => true,
+         Some("off" | "0" | "false") => false,
+-        _ => vendor == NVIDIA,
++        _ => vendor == NVIDIA || vendor == AMD,
+     }
+ }
+ 
+@@ -165,9 +168,9 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    fn only_nvidia_gets_the_thread_unless_it_is_asked_for() {
++    fn only_nvidia_and_amd_get_the_thread_unless_it_is_asked_for() {
+         assert!(thread_wanted(None, NVIDIA));
+-        assert!(!thread_wanted(None, 0x1002), "AMD");
++        assert!(thread_wanted(None, AMD), "AMD");
+         assert!(!thread_wanted(None, 0x8086), "Intel");
+         assert!(!thread_wanted(None, 0), "unknown");
+     }
+@@ -182,6 +185,6 @@ mod tests {
+         }
+         // anything else leaves the choice to the card
+         assert!(thread_wanted(Some("auto"), NVIDIA));
+-        assert!(!thread_wanted(Some(""), 0x1002));
++        assert!(!thread_wanted(Some(""), 0x8086));
+     }
+ }

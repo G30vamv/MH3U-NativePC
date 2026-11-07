@@ -7,8 +7,7 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 ## [Unreleased]
 
 ### Added
-- **Faster graphics on NVIDIA cards.** The game now prepares each frame's drawing on a second thread, so the frame rate goes up by about a quarter in the village and a fifth indoors (tested on an RTX 4070 with Vulkan and DX12). It turns on by itself on NVIDIA cards; other cards keep working as before.
-- **DX12 helper files.** `dxcompiler.dll` and `dxil.dll` now come with the game, so choosing DX12 works without extra downloads.
+- **A logo for MH3U NativePC.** A new emblem (a great sword planted in a rock, with the moon and a volcano behind it) is now the icon of `MH3U.exe` and of its window.
 - **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (the hits you take do 0 damage and add no status effects), more zenny and infinite items used in a quest. Two read-only helpers join them: **life bars for the monsters** of the quest and a **damage meter** (what the monsters' life goes down by, yours apart, and your DPS), both drawn over the game. A warning tells you that cheats can alter or corrupt your save before you turn them on.
 - The first time you play after updating, the game is built again (the cheats need new hooks).
 
@@ -17,7 +16,19 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 - **Cheats that cannot work now tell you.** If a cheat needs a part your compiled game does not have, the launcher says so when you press PLAY and offers to build the game again; the game also says it in its log. The build window warns when the launcher has no hooks list.
 
 ### Changed
-- **One setting for the graphics threads.** "GPU queue on its own thread" in Graphics is now **"Graphics in parallel (more FPS)"** with two choices: *Automatic* (recommended) and *Off*. It covers both threads the game uses for graphics. Automatic turns them on by itself only on NVIDIA cards; *Off* is for anyone who sees flickering or freezes. If you had the old setting on "Always on" the game keeps using it, but the window no longer offers it.
+- **The program is now called MH3U NativePC.** The window title, the header, the footer, the file properties of `MH3U.exe` and the Discord status say so, and the project page on GitHub moved to `G30vamv/MH3U-NativePC` (the old address keeps working). Nothing changes in how it plays or updates.
+
+## [0.9.12] - 2026-11-06
+
+### Added
+- **Faster graphics on NVIDIA and AMD cards.** The game now prepares each frame's drawing on a second thread, so the frame rate goes up by about a quarter in the village and a fifth indoors (measured on an RTX 4070 and on the Radeon inside a Ryzen) and it is smoother, with fewer hiccups. It is on by default (*Automatic*); Intel graphics stay as before until they can be tried. It uses roughly 1 GB more memory.
+
+### Fixed
+- **No more freezing when opening the item box or the equipment screens on AMD cards.** On a Radeon RX 6600 the picture could freeze or the game closed with a "graphics card stopped" message after opening the box and choosing "Change equipment", especially with decorations and jewels. It is fixed, at 1x and with 2x + FSR.
+- **The graphics thread no longer eats memory on AMD cards.** The thread that had to be switched off on AMD (it made the card hold on to gigabytes of memory in those same screens) now works fine.
+
+### Changed
+- **One setting for the graphics threads.** "GPU queue on its own thread" in Graphics is now **"Graphics in parallel (more FPS)"** with two choices: *Automatic* (recommended) and *Off*. Try *Off* if you see flickering or things that disappear.
 
 ## [0.9.11] - 2026-11-03
 

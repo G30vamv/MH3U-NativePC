@@ -528,7 +528,7 @@ class DiscordRPCManager:
                     self.close()
         return False
 
-    def update_presence(self, details="Cazando", state="Cazador", large_text="Monster Hunter 3 Ultimate (PC Native Port)"):
+    def update_presence(self, details="Cazando", state="Cazador", large_text="Monster Hunter 3 Ultimate (MH3U NativePC)"):
         if not self.connected or not self.pipe:
             return False
         try:
@@ -2039,7 +2039,7 @@ class LauncherLogic:
         # Present Mode (VSync / Mailbox)
         env["MH3U_PRESENT_MODE"] = self.config.get("present_mode", "mailbox")
 
-        # GPU queue on its own thread (faster, but it froze the picture on an AMD card): off hands the work back to the game's thread
+        # Graphics in parallel (faster; on by default on NVIDIA and AMD cards): off hands the work back to the game's thread
         env.update(gpu_thread_env(self.config))
 
         # Upscaler & Sharpness (AMD FidelityFX FSR 1.0 / CAS)
@@ -2162,7 +2162,7 @@ class LauncherLogic:
                     discord_rpc.update_presence(
                         details="Iniciando el juego...",
                         state=f"Cazador: {hunter_name}",
-                        large_text="Monster Hunter 3 Ultimate (PC Native Port)",
+                        large_text="Monster Hunter 3 Ultimate (MH3U NativePC)",
                     )
             except Exception as e:
                 print(f"Discord RPC init error: {e}")
@@ -2251,7 +2251,7 @@ class LauncherLogic:
                                 discord_rpc.update_presence(
                                     details=current_area,
                                     state=f"Cazador: {hunter_name}",
-                                    large_text="Monster Hunter 3 Ultimate (PC Native Port)",
+                                    large_text="Monster Hunter 3 Ultimate (MH3U NativePC)",
                                 )
                         except Exception:
                             pass

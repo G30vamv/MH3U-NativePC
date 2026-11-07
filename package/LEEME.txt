@@ -1,5 +1,5 @@
 ﻿============================================================
-  MONSTER HUNTER 3 ULTIMATE - PORT NATIVO DE PC (v0.9.12)
+  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.12)
   Launcher desarrollado por: g30wolff99
 ============================================================
 

@@ -1,19 +1,44 @@
-# MH3U Native Port Launcher & Online Integration
+<p align="center">
+  <img src="docs/images/mh3u-nativepc-banner.svg" alt="MH3U NativePC" width="760">
+</p>
 
-A graphical launcher for Windows for the **native PC port of Monster Hunter 3 Ultimate** (a static recompilation of the Wii U version), with **online multiplayer over a VPN** and **automatic updates** from GitHub Releases.
+**An unofficial, enhanced build of the native PC port of *Monster Hunter 3 Ultimate*:** faster graphics, working online rooms, controller support and a launcher that sets everything up and keeps itself updated.
+
+[**Download the latest version**](../../releases/latest) · [What changed in each version](CHANGELOG.md) · [Install](#installation)
+
+> **Credit where it is due.** MH3U NativePC is built on the work of two people. The **native port itself, the PC recompilation, the translator and the engine** are by **glinesbdev** ([glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port), AGPL-3.0). The **online server and network logic** are by **Matt-Wood-23** ([Matt-Wood-23/mh3u-revival](https://github.com/Matt-Wood-23/mh3u-revival), AGPL-3.0). This project adds improvements on top of them and is not affiliated with, or endorsed by, either of them.
 
 > **Legal notice.** This repository does not contain or distribute any game file (executables, models, textures, audio). You need your own legitimate copy of *Monster Hunter 3 Ultimate* (Wii U, USA version + update v32) dumped from your console. Fan project, not affiliated with Capcom or Nintendo.
 
-## What it includes
+![The MH3U NativePC launcher](docs/images/launcher-main.png)
 
-- **Guided setup:** finds your dump (base game + update), downloads a portable Clang on demand and builds `game.dll` for your CPU (optional LTO).
-- **Graphics settings:** internal resolution 1x-4x, **AMD FidelityFX Super Resolution 1.0** (real EASU + RCAS) or CAS sharpening, Vulkan or DirectX 12 backend, VSync modes, FPS counter.
-- **Controls tab:** controller layout and camera sensitivity, plus the interface for the upcoming universal button mapper.
-- **Online multiplayer:** built-in room server, automatic firewall rules (a single UAC prompt) and a guide to play with friends over Radmin VPN. See [`package/INSTRUCCIONES_MULTIJUGADOR.txt`](package/INSTRUCCIONES_MULTIJUGADOR.txt).
-- **Remote updates:** *Check for updates* button (and a silent check on start) that downloads only the files that changed, verifies them with SHA-256, makes a backup and rolls back if anything fails.
-- **Glass interface** in the Moga / Tanzia palette: frosted panels over a soft backdrop, in-window title bar, optional Windows Acrylic, live summary of your active settings and live compile / server logs.
+## What is different
 
-The launcher itself is currently in Spanish; a full English translation is planned for the next release.
+Compared with the original port, MH3U NativePC adds:
+
+- **Faster graphics.** The game's drawing work is split across threads, so the frame rate goes up by roughly a fifth to a quarter on the cards we measured (see below). On by default on NVIDIA and AMD cards; there is an *Off* switch in the launcher.
+- **No more freezes on AMD cards.** The picture used to freeze, or the game closed, after opening the item box or the equipment screens on some Radeon cards. Fixed.
+- **Real AMD FidelityFX Super Resolution 1.0** (EASU + RCAS) or CAS sharpening, a 1x-4x internal resolution and Vulkan or DirectX 12.
+- **Controllers.** DualSense, DualShock 4 and generic gamepads are read straight from the device, with camera sensitivity and layout options and detection of HidHide.
+- **In-game settings** on F1 / F2: resolution, upscaler, sharpness, present mode, FPS counter, language and camera sensitivity, without leaving the game.
+- **Online rooms.** A room server is built in, with automatic firewall rules (a single UAC prompt) and a guide to play with friends over Radmin VPN. It has been tried with friends and mixed with Cemu players.
+- **Fixes to the picture.** Character colours (a cold blue-green tint) and some textures that used the picture of an old frame.
+- **A clear message instead of a frozen picture** if the graphics card stops answering, and smaller buffers on cards with little memory.
+- **A launcher that does the setup:** finds your dump, downloads a portable Clang on demand, builds the game for your CPU, and updates itself (see [How updates work](#how-updates-work)).
+
+The launcher is currently in Spanish; a full English translation is planned.
+
+### Frames per second
+
+![Frames per second before and after parallel graphics](docs/images/fps-parallel-graphics.svg)
+
+Measured by us on a single PC (Ryzen 9600X), at 1x resolution, in the village and inside the home, with the same route each time. On the RTX 4070 the left bars are an earlier test build of the idea, not a published version; on the Radeon built into the Ryzen the only difference between the bars is the *Parallel graphics* switch. Your numbers will depend on your PC; slow processors should gain more, but we have not measured one yet.
+
+### A look at the launcher
+
+| Graphics | Controls | Online |
+|---|---|---|
+| ![Graphics tab](docs/images/launcher-graphics.png) | ![Controls tab](docs/images/launcher-controls.png) | ![Online tab](docs/images/launcher-online.png) |
 
 ## Requirements
 
@@ -77,11 +102,12 @@ docs/            Release guide
 
 ## Credits
 
-- **Launcher, online integration and performance work:** g30wolff99 ([@G30vamv](https://github.com/G30vamv)).
+- **Launcher, online integration and the improvements listed above:** g30wolff99 ([@G30vamv](https://github.com/G30vamv)).
 - **Native port and PC recompilation:** [glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port) (AGPL-3.0).
 - **Server and online network logic:** [Matt-Wood-23/mh3u-revival](https://github.com/Matt-Wood-23/mh3u-revival) (AGPL-3.0).
 - Upscaling: [AMD FidelityFX Super Resolution 1.0](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT).
 - Portable Clang: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
+- **Artwork:** the logo and emblem were drawn by g30wolff99 for this project. They are inspired by the look of the logo of [Yakumo](https://github.com/TeamGDB/Yakumo), TeamGDB's native port of *Monster Hunter Portable 3rd*, which he liked so much that he wanted to give MH3U NativePC a crest of its own. Thank you, TeamGDB, for the spark.
 
 ## License
 

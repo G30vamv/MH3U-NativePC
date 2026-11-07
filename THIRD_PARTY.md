@@ -9,7 +9,6 @@ This project is AGPL-3.0-only. The Releases include or download the following th
 | [FidelityFX Super Resolution 1.0](https://github.com/GPUOpen-Effects/FidelityFX-FSR) | Advanced Micro Devices, Inc. | MIT | EASU and RCAS shaders, ported to WGSL in `mh3u-gfx/src/fsr.rs` (part of `mh3u-tools.exe`). Notice below. |
 | [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) | Martin Storsjö | Apache-2.0 with LLVM exception / MIT | Portable Clang compiler that the launcher downloads on demand. |
 | LLVM `libunwind.dll` | LLVM Project | Apache-2.0 with LLVM exception | Runtime required by `mh3u-tools.exe`. |
-| [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler) | Microsoft Corporation | LLVM Release License (University of Illinois/NCSA) for `dxcompiler.dll`; `dxil.dll` is Microsoft's DXIL signing library, distributed with DXC releases | Optional shader compiler for the DX12 backend (`dxcompiler.dll` and `dxil.dll` beside `mh3u-tools.exe`, DXC v1.9.2607 x64, unmodified). Without them DX12 falls back to the slower built-in compiler. |
 | [PySide6 / Qt for Python](https://doc.qt.io/qtforpython-6/) | The Qt Company | LGPL-3.0 | Launcher interface (bundled dynamically in `MH3U.exe`). |
 | [Pillow](https://python-pillow.org/) | Pillow contributors | HPND | Image handling (backdrop and glass rendering). |
 | [PyInstaller](https://pyinstaller.org/) | PyInstaller team | GPL-2.0 with bootloader exception | Packaging of `MH3U.exe`. |
