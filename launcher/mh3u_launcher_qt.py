@@ -1,5 +1,5 @@
 """
-Monster Hunter 3 Ultimate - PC Native Port Launcher
+MH3U NativePC - launcher for the native PC port of Monster Hunter 3 Ultimate
 Author: g30wolff99
 The launcher window (PySide6, glass look). What the launcher does lives in core.py.
 """
@@ -166,7 +166,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.server_process = None
 
         self.window = Window(self)
-        self.window.setWindowTitle(f"Monster Hunter 3 Ultimate - PC Port Launcher {APP_VERSION}")
+        self.window.setWindowTitle(f"MH3U NativePC {APP_VERSION}")
         icon_path = os.path.join(self.assets_dir, "app_icon.ico")
         if os.path.exists(icon_path):
             self.window.setWindowIcon(QIcon(icon_path))
@@ -291,7 +291,7 @@ class MH3ULauncherApp(LauncherLogic):
         icon_path = os.path.join(self.assets_dir, "app_icon.ico")
         self.titlebar = qttitle.TitleBar(
             self.window,
-            f"Monster Hunter 3 Ultimate - PC Port Launcher {APP_VERSION}",
+            f"MH3U NativePC {APP_VERSION}",
             icon_path if os.path.exists(icon_path) else None,
         )
         root.addWidget(self.titlebar)
@@ -327,7 +327,7 @@ class MH3ULauncherApp(LauncherLogic):
         text.setSpacing(2)
         title = Label("MONSTER HUNTER 3 ULTIMATE", "#f2b94b", 24, bold=True, family="Georgia")
         sub = Label(
-            f"PC Native Port Launcher {APP_VERSION} • Vulkan / DX12 / LTO • Puerto Tanzia", "#b9ccd2", 11
+            f"MH3U NativePC {APP_VERSION} • Vulkan / DX12 / LTO • Puerto Tanzia", "#b9ccd2", 11
         )
         text.addWidget(title)
         text.addWidget(sub)
@@ -354,7 +354,7 @@ class MH3ULauncherApp(LauncherLogic):
         footer = QWidget()
         lay = QHBoxLayout(footer)
         lay.setContentsMargins(6, 0, 6, 0)
-        lay.addWidget(Label(f"Monster Hunter 3 Ultimate (Wii U) • Recompilación Nativa para PC | {APP_VERSION}", "#a9bec6", 9.5))
+        lay.addWidget(Label(f"Monster Hunter 3 Ultimate (Wii U) • MH3U NativePC | {APP_VERSION}", "#a9bec6", 9.5))
         lay.addStretch(1)
         lay.addWidget(Label("Launcher desarrollado por g30wolff99", "#e3d8bd", 9.5, bold=True))
         return footer
@@ -930,7 +930,7 @@ class MH3ULauncherApp(LauncherLogic):
         credits, c = _grid_card("card")
         c.addWidget(Label("Créditos y Agradecimientos", "#4fc3d6", 12.5, bold=True), 0, 0, 1, 2)
         c.addWidget(Label("Desarrollo del Launcher:", "#eab84c", 10.5, bold=True), 1, 0)
-        c.addWidget(Button("G30vamv / Mh3u-native-port-launcher-and-online-integration ↗", "link", lambda: webbrowser.open_new_tab("https://github.com/G30vamv/Mh3u-native-port-launcher-and-online-integration"), height=28, bold=False), 1, 1, Qt.AlignmentFlag.AlignLeft)
+        c.addWidget(Button("G30vamv / MH3U-NativePC ↗", "link", lambda: webbrowser.open_new_tab("https://github.com/G30vamv/MH3U-NativePC"), height=28, bold=False), 1, 1, Qt.AlignmentFlag.AlignLeft)
         links = [
             ("Port Nativo & Recompilación PC:", "glinesbdev / mh3u-port ↗", "https://github.com/glinesbdev/mh3u-port"),
             ("Lógica de Red & Servidor Online:", "Matt-Wood-23 / mh3u-revival ↗", "https://github.com/Matt-Wood-23/mh3u-revival"),
@@ -939,7 +939,7 @@ class MH3ULauncherApp(LauncherLogic):
             c.addWidget(Label(what, None, 10.5, bold=True), i, 0)
             c.addWidget(Button(text, "link", lambda u=url: webbrowser.open_new_tab(u), height=28, bold=False), i, 1, Qt.AlignmentFlag.AlignLeft)
         c.addWidget(Label("Versión del Launcher:", "#4fc3d6", 10.5, bold=True), 4, 0)
-        c.addWidget(Label(f"{APP_VERSION} (Recompilación Nativa PC)", "#eab84c", 10.5, bold=True), 4, 1)
+        c.addWidget(Label(f"{APP_VERSION} (MH3U NativePC)", "#eab84c", 10.5, bold=True), 4, 1)
         c.setColumnStretch(1, 1)
         lay.addWidget(credits)
         lay.addStretch(1)

@@ -5,7 +5,7 @@ Este paquete se distribuye bajo la GNU Affero General Public License v3.0
 (ver LICENSE.txt). Codigo fuente correspondiente de cada componente:
 
 1) Launcher (MH3U.exe) + herramientas de release + parches de abajo
-   https://github.com/G30vamv/Mh3u-native-port-launcher-and-online-integration
+   https://github.com/G30vamv/MH3U-NativePC
 
 2) mh3u-tools.exe  (port nativo de glinesbdev/mh3u-port, con modificaciones)
    Original : https://github.com/glinesbdev/mh3u-port  (commit base 41d3a9b)

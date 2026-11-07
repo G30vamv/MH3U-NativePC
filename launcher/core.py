@@ -394,7 +394,7 @@ class DiscordRPCManager:
                     self.close()
         return False
 
-    def update_presence(self, details="Cazando", state="Cazador", large_text="Monster Hunter 3 Ultimate (PC Native Port)"):
+    def update_presence(self, details="Cazando", state="Cazador", large_text="Monster Hunter 3 Ultimate (MH3U NativePC)"):
         if not self.connected or not self.pipe:
             return False
         try:
@@ -1975,7 +1975,7 @@ class LauncherLogic:
                     discord_rpc.update_presence(
                         details="Iniciando el juego...",
                         state=f"Cazador: {hunter_name}",
-                        large_text="Monster Hunter 3 Ultimate (PC Native Port)",
+                        large_text="Monster Hunter 3 Ultimate (MH3U NativePC)",
                     )
             except Exception as e:
                 print(f"Discord RPC init error: {e}")
@@ -2064,7 +2064,7 @@ class LauncherLogic:
                                 discord_rpc.update_presence(
                                     details=current_area,
                                     state=f"Cazador: {hunter_name}",
-                                    large_text="Monster Hunter 3 Ultimate (PC Native Port)",
+                                    large_text="Monster Hunter 3 Ultimate (MH3U NativePC)",
                                 )
                         except Exception:
                             pass

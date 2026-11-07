@@ -15,7 +15,7 @@ import subprocess
 import sys
 import urllib.request
 
-UPDATE_REPO = "G30vamv/Mh3u-native-port-launcher-and-online-integration"
+UPDATE_REPO = "G30vamv/MH3U-NativePC"
 MANIFEST_URL = f"https://github.com/{UPDATE_REPO}/releases/latest/download/manifest.json"
 MANIFEST_ENV = "MH3U_UPDATE_MANIFEST"  # override (tests): http(s):// or file:/// URL
 UPDATE_DIR = "_update"

@@ -20,12 +20,12 @@ VSVersionInfo(
           '040904B0',
           [
             StringStruct('CompanyName', 'g30wolff99'),
-            StringStruct('FileDescription', 'Monster Hunter 3 Ultimate - PC Port Launcher'),
+            StringStruct('FileDescription', 'MH3U NativePC'),
             StringStruct('FileVersion', '0.9.12.0'),
             StringStruct('InternalName', 'MH3U'),
             StringStruct('LegalCopyright', 'Copyright (c) 2026 g30wolff99'),
             StringStruct('OriginalFilename', 'MH3U.exe'),
-            StringStruct('ProductName', 'Monster Hunter 3 Ultimate Native PC Port Launcher'),
+            StringStruct('ProductName', 'MH3U NativePC'),
             StringStruct('ProductVersion', '0.9.12.0'),
           ]
         )

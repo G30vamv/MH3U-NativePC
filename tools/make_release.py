@@ -20,7 +20,7 @@ import shutil
 import sys
 import zipfile
 
-REPO = "G30vamv/Mh3u-native-port-launcher-and-online-integration"
+REPO = "G30vamv/MH3U-NativePC"
 
 # Files that may be part of an update (relative to the launcher folder).
 UPDATE_FILES = [
