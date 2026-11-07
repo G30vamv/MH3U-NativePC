@@ -10,9 +10,9 @@ import ctypes
 import math
 import sys
 
-from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QTimer, QVariantAnimation
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QProxyStyle, QStyle
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPen, QRadialGradient
+from PySide6.QtWidgets import QApplication, QFrame, QGraphicsOpacityEffect, QLabel, QProxyStyle, QStyle, QVBoxLayout, QWidget
 
 _user_wants = True  # the "Animaciones" switch of the menu
 _windows_allows = None  # cached answer of Windows ("Show animations in Windows")
@@ -210,3 +210,117 @@ class TipStyle(QProxyStyle):
         if hint == QStyle.StyleHint.SH_ToolTip_FallAsleepDelay:
             return 600
         return super().styleHint(hint, option, widget, returnData)
+
+
+class TipPopup(QFrame):
+    """The explanation that shows when the mouse rests on an option: the colours of the launcher's own backdrop (deep teal-navy with a
+    warm corner), light text on it so it reads well, and it fades in while rising a few pixels."""
+
+    def __init__(self):
+        super().__init__(None, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.label = QLabel()
+        self.label.setWordWrap(True)
+        self.label.setStyleSheet("color: #f6efdc; background: transparent; font-family: 'Segoe UI'; font-size: 10pt;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 11, 16, 12)
+        lay.addWidget(self.label)
+        self._group = None
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        g = QLinearGradient(0, 0, r.width(), r.height())
+        g.setColorAt(0.0, QColor(13, 40, 48, 250))
+        g.setColorAt(0.65, QColor(14, 30, 40, 250))
+        g.setColorAt(1.0, QColor(24, 30, 32, 250))
+        p.setBrush(g)
+        p.setPen(QPen(QColor(255, 255, 255, 60), 1))
+        p.drawRoundedRect(r, 12, 12)
+        warm = QRadialGradient(r.right(), r.bottom(), r.width() * 0.8)  # the amber corner of the backdrop
+        warm.setColorAt(0.0, QColor(184, 121, 30, 70))
+        warm.setColorAt(1.0, QColor(184, 121, 30, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(warm)
+        p.drawRoundedRect(r, 12, 12)
+
+    def show_text(self, text, global_pos):
+        self.label.setText(text)
+        self.setMaximumWidth(420)
+        self.adjustSize()
+        screen = QGuiApplication.screenAt(global_pos) or QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        x = min(global_pos.x() + 14, area.right() - self.width() - 8)
+        y = global_pos.y() + 22
+        if y + self.height() > area.bottom() - 8:  # not enough room below: above the pointer
+            y = global_pos.y() - self.height() - 10
+        home = QPoint(max(area.left() + 4, x), max(area.top() + 4, y))
+        self.move(home)
+        self.show()
+        if self._group is not None:
+            self._group.stop()
+        if not enabled():
+            self.setWindowOpacity(1.0)
+            return
+        self.setWindowOpacity(0.0)
+        fade = QPropertyAnimation(self, b"windowOpacity")
+        fade.setDuration(170)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        rise = QPropertyAnimation(self, b"pos")
+        rise.setDuration(200)
+        rise.setStartValue(home + QPoint(0, 8))
+        rise.setEndValue(home)
+        rise.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._group = QParallelAnimationGroup(self)
+        self._group.addAnimation(fade)
+        self._group.addAnimation(rise)
+        self._group.start()
+
+
+class TipManager(QObject):
+    """Shows `TipPopup` instead of Qt's plain tooltip for every widget that has a tooltip."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.popup = TipPopup()
+        self._owner = None
+
+    def hide(self):
+        self._owner = None
+        if self.popup.isVisible():
+            self.popup.hide()
+
+    def eventFilter(self, obj, event):
+        try:
+            return self._filter(obj, event)
+        except RuntimeError:  # the popup is already gone (the application is closing)
+            return False
+
+    def _filter(self, obj, event):
+        t = event.type()
+        if t == QEvent.Type.ToolTip and isinstance(obj, QWidget) and obj is not self.popup:
+            text = obj.toolTip()
+            if text:
+                self._owner = obj
+                self.popup.show_text(text, event.globalPos())
+                return True
+            return False
+        if t in (QEvent.Type.Leave, QEvent.Type.Hide) and obj is self._owner:
+            self.hide()
+        elif t in (QEvent.Type.MouseButtonPress, QEvent.Type.Wheel, QEvent.Type.KeyPress, QEvent.Type.WindowDeactivate):
+            self.hide()
+        return False
+
+
+def install_tips(app=None):
+    """Turns on the launcher's own tooltips for the whole application (keeps a reference so it lives as long as the app)."""
+    app = app or QApplication.instance()
+    manager = TipManager(app)
+    app.installEventFilter(manager)
+    app.aboutToQuit.connect(lambda: app.removeEventFilter(manager))
+    app._tip_manager = manager
+    return manager

@@ -369,9 +369,119 @@ def Switch(text="", command=None, parent=None):  # noqa: N802
     return _Toggle(text, command, switch=True, parent=parent)
 
 
-class Segmented(QFrame):
-    def __init__(self, values, command=None, parent=None, size=10.5, bold=False):
+def plain(name):
+    """A tab's name without the icon that starts it."""
+    n = name.strip()
+    first = n.split(" ", 1)
+    if len(first) == 2 and not first[0].isascii():
+        return first[1].strip()
+    return n
+
+
+class _TabButton(QAbstractButton):
+    """One choice of a bar of tabs or of a selector: text only, a light under the mouse that fades in and out."""
+
+    def __init__(self, text, size=10.5, bold=True, radius=14, parent=None):
         super().__init__(parent)
+        self.setText(text)
+        self.setCheckable(True)
+        self.setFont(font(size, bold))
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._radius = radius
+        self._anim = qtanim.hover_animation(self)
+
+    def sizeHint(self):
+        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 38, 34)
+
+    def enterEvent(self, event):
+        qtanim.hover_to(self, self._anim, 1)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        qtanim.hover_to(self, self._anim, 0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isChecked() and self._hover > 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, round(40 * self._hover)))
+            p.drawRoundedRect(QRectF(self.rect()), self._radius, self._radius)
+        color = QColor("#fff6e0") if self.isChecked() else qtanim.mix(QColor(PARCHMENT), QColor("#ffffff"), self._hover)
+        p.setPen(color)
+        p.setFont(self.font())
+        p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter, self._shown_text())
+
+    def _shown_text(self):
+        return self.text().replace("&&", "&")
+
+
+class PillBar(QFrame):
+    """A bar of choices that paints a gold pill under the chosen one; the pill slides to the next choice when it changes."""
+
+    def __init__(self, radius=18, pill_radius=14, parent=None):
+        super().__init__(parent)
+        self.radius = radius
+        self.pill_radius = pill_radius
+        self.pill = None  # QRectF, in the bar's coordinates
+        self.on_resize = None
+        self._slide = QVariantAnimation(self)
+        self._slide.setDuration(300)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._slide.valueChanged.connect(self._slide_step)
+
+    def _slide_step(self, rect):
+        self.pill = QRectF(rect)
+        self.update()
+
+    def move_pill(self, target, animate):
+        target = QRectF(target)
+        self._slide.stop()
+        if animate and qtanim.enabled() and self.pill is not None and self.isVisible():
+            self._slide.setStartValue(QRectF(self.pill))
+            self._slide.setEndValue(target)
+            self._slide.start()
+        else:
+            self.pill = target
+            self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.on_resize:
+            self.on_resize()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.on_resize:
+            self.on_resize()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        p.setBrush(QColor(8, 20, 28, 170))
+        p.drawRoundedRect(r, self.radius, self.radius)
+        if self.pill is not None:
+            g = QLinearGradient(0, self.pill.top(), 0, self.pill.bottom())
+            g.setColorAt(0.0, QColor(GOLD_HOVER))
+            g.setColorAt(1.0, QColor(GOLD))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(g)
+            p.drawRoundedRect(self.pill, self.pill_radius, self.pill_radius)
+
+
+class _TabBar(PillBar):
+    def __init__(self, parent=None):
+        super().__init__(18, 14, parent)
+        self.setObjectName("tabbar")
+
+
+class Segmented(PillBar):
+    def __init__(self, values, command=None, parent=None, size=10.5, bold=False):
+        super().__init__(12, 9, parent)
         self.setObjectName("seg")
         self._command = command
         self._buttons = {}
@@ -380,35 +490,30 @@ class Segmented(QFrame):
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(4)
         for v in values:
-            b = QPushButton(tx(v))
-            b.setCheckable(True)
-            b.setFont(font(size, bold))
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b = _TabButton(tx(v), size, bold, 9)
             b.setMinimumHeight(30)
             b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             b.clicked.connect(lambda checked=False, v=v: self._clicked(v))
             lay.addWidget(b)
             self._buttons[v] = b
-        self.setStyleSheet(
-            f"""
-            #seg {{ background: rgba(8,20,28,170); border: 1px solid rgba(255,255,255,40); border-radius: 12px; }}
-            #seg QPushButton {{ background: transparent; color: {PARCHMENT}; border: none; border-radius: 9px; padding: 4px 10px; }}
-            #seg QPushButton:hover {{ background: rgba(255,255,255,26); }}
-            #seg QPushButton:checked {{ background: {GOLD}; color: #fff6e0; }}
-            #seg QPushButton:checked:hover {{ background: {GOLD_HOVER}; }}
-            """
-        )
+        self.on_resize = lambda: self._place_pill(False)
 
-    def set(self, value):
+    def _place_pill(self, animate):
+        b = self._buttons.get(self._value)
+        if b is not None and b.width() > 0:
+            self.move_pill(b.geometry(), animate)
+
+    def set(self, value, animate=False):
         self._value = value
         for v, b in self._buttons.items():
             b.setChecked(v == value)
+        self._place_pill(animate)
 
     def get(self):
         return self._value
 
     def _clicked(self, value):
-        self.set(value)
+        self.set(value, animate=True)
         if self._command:
             self._command(value)
 
@@ -506,105 +611,6 @@ class LogBox(QPlainTextEdit):
 
     def delete(self, first, last=None):
         self.clear()
-
-
-def plain(name):
-    """A tab's name without the icon that starts it."""
-    n = name.strip()
-    first = n.split(" ", 1)
-    if len(first) == 2 and not first[0].isascii():
-        return first[1].strip()
-    return n
-
-
-class _TabButton(QAbstractButton):
-    """One tab: text only, a light under the mouse that fades in and out."""
-
-    def __init__(self, text, parent=None):
-        super().__init__(parent)
-        self.setText(text)
-        self.setCheckable(True)
-        self.setFont(font(10.5, bold=True))
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._anim = qtanim.hover_animation(self)
-
-    def sizeHint(self):
-        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 38, 34)
-
-    def enterEvent(self, event):
-        qtanim.hover_to(self, self._anim, 1)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        qtanim.hover_to(self, self._anim, 0)
-        super().leaveEvent(event)
-
-    def paintEvent(self, _event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if not self.isChecked() and self._hover > 0:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(255, 255, 255, round(40 * self._hover)))
-            p.drawRoundedRect(QRectF(self.rect()), 14, 14)
-        color = QColor("#fff6e0") if self.isChecked() else qtanim.mix(QColor(PARCHMENT), QColor("#ffffff"), self._hover)
-        p.setPen(color)
-        p.setFont(self.font())
-        p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter, self.text())
-
-
-class _TabBar(QFrame):
-    """The bar of the tabs: it paints the gold pill under the tab that is showing, and the pill slides to the next one."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("tabbar")
-        self.pill = None  # QRectF, in the bar's coordinates
-        self.on_resize = None
-        self._slide = QVariantAnimation(self)
-        self._slide.setDuration(300)
-        self._slide.setEasingCurve(QEasingCurve.Type.OutBack)
-        self._slide.valueChanged.connect(self._slide_step)
-
-    def _slide_step(self, rect):
-        self.pill = QRectF(rect)
-        self.update()
-
-    def move_pill(self, target, animate):
-        target = QRectF(target)
-        self._slide.stop()
-        if animate and qtanim.enabled() and self.pill is not None and self.isVisible():
-            self._slide.setStartValue(QRectF(self.pill))
-            self._slide.setEndValue(target)
-            self._slide.start()
-        else:
-            self.pill = target
-            self.update()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.on_resize:
-            self.on_resize()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if self.on_resize:
-            self.on_resize()
-
-    def paintEvent(self, _event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
-        p.setBrush(QColor(8, 20, 28, 170))
-        p.drawRoundedRect(r, 18, 18)
-        if self.pill is not None:
-            g = QLinearGradient(0, self.pill.top(), 0, self.pill.bottom())
-            g.setColorAt(0.0, QColor(GOLD_HOVER))
-            g.setColorAt(1.0, QColor(GOLD))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(g)
-            p.drawRoundedRect(self.pill, 14, 14)
 
 
 class TabView(QWidget):

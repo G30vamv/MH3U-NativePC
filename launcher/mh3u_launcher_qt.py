@@ -35,7 +35,6 @@ from core import (
     DEFAULT_OUT_DIR,
     LauncherLogic,
     get_assets_dir,
-    get_hunter_name_from_save,
     gpu_thread_mode,
     get_local_ip_addresses,
     updater,
@@ -481,7 +480,8 @@ class MH3ULauncherApp(LauncherLogic):
         lay.addWidget(status)
 
         self.btn_play = Button("⚔️  JUGAR MONSTER HUNTER 3 ULTIMATE", "teal", self.launch_game, height=64, size=16)
-        lay.addWidget(self.btn_play)
+        self.btn_play.setMinimumWidth(self.btn_play.fontMetrics().horizontalAdvance(self.btn_play.text()) + 150)
+        lay.addWidget(self.btn_play, 0, Qt.AlignmentFlag.AlignHCenter)
         self._glow = qtanim.Glow(self.btn_play, self._glow_allowed)
 
         row = QHBoxLayout()
@@ -754,18 +754,6 @@ class MH3ULauncherApp(LauncherLogic):
                 chk.select()
             r.addWidget(chk)
 
-        r.addWidget(Label("Nombre del Cazador (Nombre en Creación / Partida):", "#4fc3d6", 10.5, bold=True))
-        self.entry_hunter_name_cfg = Entry(width=300)
-        current_hunter = self.config.get("hunter_name", "Hunter")
-        if current_hunter == "Hunter":
-            detected = get_hunter_name_from_save(self.config.get("out_dir", DEFAULT_OUT_DIR))
-            if detected:
-                current_hunter = detected
-                self.config["hunter_name"] = detected
-        self.entry_hunter_name_cfg.insert(0, current_hunter)
-        self.entry_hunter_name_cfg.on_change(self.save_settings_from_ui)
-        r.addWidget(self.entry_hunter_name_cfg)
-
         r.addWidget(Label("Trucos (cheats)", "#e07a6f", 10.5, bold=True))
         warn = _hint("⚠ Pueden alterar o corromper tu partida guardada. Haz una copia antes (pestaña «Partidas & Logs») y úsalos bajo tu propia decisión.", "#eab84c")
         warn.setWordWrap(True)
@@ -985,11 +973,6 @@ class MH3ULauncherApp(LauncherLogic):
         self.entry_room_id = Entry(width=130)
         self.entry_room_id.insert(0, self.config.get("online_room_id", "1001"))
         c.addWidget(self.entry_room_id, 3, 1)
-        c.addWidget(Label("Tu Nombre de Cazador:"), 4, 0)
-        self.entry_hunter_name = Entry(width=230)
-        detected = get_hunter_name_from_save(self.config.get("out_dir", DEFAULT_OUT_DIR))
-        self.entry_hunter_name.insert(0, self.config.get("online_hunter_name") or detected or "Hunter")
-        c.addWidget(self.entry_hunter_name, 4, 1)
         c.setColumnStretch(1, 1)
         lay.addWidget(self.frame_client_mode)
 
@@ -1079,6 +1062,7 @@ def main():
     qapp = QApplication(sys.argv)
     qapp.setStyle(qtanim.TipStyle())
     qapp.setStyleSheet(STYLE)
+    qtanim.install_tips(qapp)
     qapp.setFont(font(10.5))
     qtshim.init_threading()
     app = MH3ULauncherApp(qapp)

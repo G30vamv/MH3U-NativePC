@@ -8,7 +8,7 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 
 ### Added
 - **A menu for the launcher's own options.** The gear next to the window buttons opens a menu with the options that belong to the launcher itself: the animations, the Acrylic effect of the window, the Discord status and looking for updates when it opens. The Acrylic and Discord options moved there from the Graphics tab. The tabs stay where they were, now with just their names.
-- **Soft animations you can notice.** The tabs have a gold pill that slides to the tab you click and lights up under the mouse, pages rise into place when you change them, buttons glow softly under the mouse, switches slide, the launcher comes in piece by piece when it opens and the PLAY button gently glows in gold while the game is not running. They cost nothing when you are not clicking, they turn off by themselves if Windows has animations off, and there is a switch for them in the menu.
+- **Soft animations you can notice.** The tabs and the selectors (resolution, graphics engine, VSync...) have a gold pill that slides to the choice you click and lights up under the mouse, pages rise into place when you change them, buttons glow softly under the mouse, switches slide, the launcher comes in piece by piece when it opens and the PLAY button gently glows in gold while the game is not running. They cost nothing when you are not clicking, they turn off by themselves if Windows has animations off, and there is a switch for them in the menu.
 - **A logo for MH3U NativePC.** A new emblem (a great sword planted in a rock, with the moon and a volcano behind it) is now the icon of `MH3U.exe` and of its window.
 - **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (the hits you take do 0 damage and add no status effects), more zenny and infinite items used in a quest. Two read-only helpers join them: **life bars for the monsters** of the quest and a **damage meter** (what the monsters' life goes down by, yours apart, and your DPS), both drawn over the game. A warning tells you that cheats can alter or corrupt your save before you turn them on.
 - The first time you play after updating, the game is built again (the cheats need new hooks).
@@ -17,8 +17,12 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 - **Rebuilding after an update now really starts over when it has to.** If an update changed the game's code (like the cheats do), the launcher used to build the old code again and leave the new parts out, so some new features did nothing. It now makes the code again whenever the build is out of date.
 - **Cheats that cannot work now tell you.** If a cheat needs a part your compiled game does not have, the launcher says so when you press PLAY and offers to build the game again; the game also says it in its log. The build window warns when the launcher has no hooks list.
 
+### Removed
+- **The two boxes for the hunter's name.** Type the name of a new hunter in the game itself, with its own keyboard; with a saved game the launcher keeps using that hunter's name for Discord and the online rooms, as before.
+
 ### Changed
-- **The explanations show when the mouse is over an option.** The little texts under the options are now tooltips, and the options that have one start with a 💡.
+- **The explanations show when the mouse is over an option.** The little texts under the options are now tooltips, shown in a small panel with the colours of the launcher that fades in softly, and the options that have one start with a 💡.
+- **The PLAY button is as wide as its text, with some room**, and sits in the middle instead of stretching across the whole window.
 - **The program is now called MH3U NativePC.** The window title, the header, the footer, the file properties of `MH3U.exe` and the Discord status say so, and the project page on GitHub moved to `G30vamv/MH3U-NativePC` (the old address keeps working). Nothing changes in how it plays or updates.
 
 ## [0.9.12] - 2026-11-06

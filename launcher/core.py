@@ -913,13 +913,6 @@ class LauncherLogic:
             self.config["build_lto"] = bool(self.chk_lto.get())
         if hasattr(self, "chk_discord_rpc"):
             self.config["discord_rpc"] = bool(self.chk_discord_rpc.get())
-        if hasattr(self, "entry_hunter_name_cfg"):
-            val = self.entry_hunter_name_cfg.get().strip() or "Hunter"
-            self.config["hunter_name"] = val
-            self.config["online_hunter_name"] = val
-            if hasattr(self, "entry_hunter_name"):
-                self.entry_hunter_name.delete(0, END)
-                self.entry_hunter_name.insert(0, val)
         self.save_config()
 
         mods_text = "F1 Wishlist" if self.config["overlay"] else "Sin overlay"
@@ -1438,15 +1431,6 @@ class LauncherLogic:
         self.config["online_enabled"] = bool(self.switch_online.get())
         mode_val = self.seg_online_mode.get()
         self.config["online_mode"] = "host" if "Host" in mode_val else "client"
-
-        if hasattr(self, "entry_hunter_name"):
-            h_name = self.entry_hunter_name.get().strip()
-            if h_name:
-                self.config["online_hunter_name"] = h_name
-                self.config["hunter_name"] = h_name
-                if hasattr(self, "entry_hunter_name_cfg"):
-                    self.entry_hunter_name_cfg.delete(0, END)
-                    self.entry_hunter_name_cfg.insert(0, h_name)
 
         if hasattr(self, "entry_server_host"):
             self.config["online_server"] = self.entry_server_host.get().strip() or "127.0.0.1"
@@ -2047,15 +2031,10 @@ class LauncherLogic:
         sharpness_pct = self.config.get("fsr_sharpness", 75)
         env["MH3U_FSR_SHARPNESS"] = str(round(float(sharpness_pct) / 100.0, 2))
 
-        # Hunter Name and Software Keyboard for character creation
+        # The hunter's name is the one in the saved game; a new hunter types it in the game's own keyboard (the launcher does not ask for it)
         detected_hunter = get_hunter_name_from_save(self.config.get("out_dir", DEFAULT_OUT_DIR))
-        hunter_name = detected_hunter or self.config.get("hunter_name") or self.config.get("online_hunter_name", "Hunter")
-        if hunter_name:
-            env["MH3U_HUNTER_NAME"] = hunter_name
-            # Only a new hunter's name is typed for the player (the first keyboard prompt); the rest (a room's name, the chat)
-            # opens the keyboard window of the game's overlay
-            if not detected_hunter:
-                env["MH3U_SWKBD_TEXT"] = hunter_name
+        if detected_hunter:
+            env["MH3U_HUNTER_NAME"] = detected_hunter
 
         # Language of the game's overlay and where it keeps the settings changed there
         env["MH3U_UI_LANG"] = self.language()

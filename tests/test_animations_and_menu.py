@@ -210,5 +210,55 @@ class WidgetTests(unittest.TestCase):
         self.assertFalse(bar.btn_menu.grab().isNull())
 
 
+class SelectorAndTipTests(unittest.TestCase):
+    def test_a_selector_has_the_sliding_pill_of_the_tabs(self):
+        import qtanim
+        from qtshim import Segmented
+
+        qtanim._windows_allows = True
+        qtanim.set_user_choice(True)
+        picked = []
+        seg = Segmented(["Uno", "Dos", "Tres"], picked.append)
+        seg.resize(420, 40)
+        seg.set("Uno")
+        seg.show()
+        wait(60)
+        first = seg.pill.left()
+        seg._buttons["Tres"].click()
+        wait(450)
+        self.assertEqual(seg.get(), "Tres")
+        self.assertEqual(picked, ["Tres"])
+        self.assertGreater(seg.pill.left(), first)
+        self.assertAlmostEqual(seg.pill.left(), seg._buttons["Tres"].geometry().left(), delta=1)
+
+    def test_a_tooltip_appears_in_the_launchers_own_popup_and_goes_when_the_mouse_leaves(self):
+        import qtanim
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QHelpEvent
+
+        qtanim._windows_allows = True
+        manager = qtanim.TipManager()
+        w = QWidget()
+        w.setToolTip("Explicación de la opción")
+        w.show()
+        ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(5, 5), w.mapToGlobal(QPoint(5, 5)))
+        self.assertTrue(manager.eventFilter(w, ev))  # taken over: Qt's own tooltip does not show
+        self.assertTrue(manager.popup.isVisible())
+        self.assertIn("Explicación", manager.popup.label.text())
+        manager.eventFilter(w, QEvent(QEvent.Type.Leave))
+        self.assertFalse(manager.popup.isVisible())
+        # a widget without an explanation is left to its parent
+        plain = QWidget()
+        self.assertFalse(manager.eventFilter(plain, QHelpEvent(QEvent.Type.ToolTip, QPoint(1, 1), QPoint(1, 1))))
+
+    def test_the_hunter_name_boxes_are_gone(self):
+        base = os.path.join(os.path.dirname(__file__), "..", "launcher")
+        window = open(os.path.join(base, "mh3u_launcher_qt.py"), encoding="utf-8").read()
+        logic = open(os.path.join(base, "core.py"), encoding="utf-8").read()
+        self.assertNotIn("entry_hunter_name", window)
+        self.assertNotIn("entry_hunter_name", logic)
+        self.assertNotIn("MH3U_SWKBD_TEXT", logic)  # a new hunter types the name in the game's own keyboard
+
+
 if __name__ == "__main__":
     unittest.main()
