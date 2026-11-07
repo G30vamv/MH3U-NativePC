@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 440" width="920" height="440" role="img" aria-labelledby="t d" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<title id="t">Frames per second before and after parallel graphics</title>
+<desc id="d">RTX 4070: village 125 to 155 fps, home 161 to about 195 fps. AMD Radeon in a Ryzen: village 65 to 81 fps, home 54.5 to 65.5 fps.</desc>
+<rect width="920" height="440" rx="12" fill="#fcfcfb" stroke="#e4e3df"/>
+<text x="28" y="40" font-size="19" font-weight="600" fill="#0b0b0b">Frames per second, before and after parallel graphics</text>
+<text x="28" y="62" font-size="13" fill="#52514e">Higher is better. Measured by us on one PC, 1x resolution, same scenes (village, inside the home).</text>
+<text x="44" y="104" font-size="14" font-weight="600" fill="#0b0b0b">NVIDIA RTX 4070 (1x, Vulkan)</text>
+<rect x="44" y="118" width="10" height="10" rx="2" fill="#2a78d6"/><text x="60" y="127" font-size="12" fill="#52514e">Earlier test build</text>
+<rect x="229" y="118" width="10" height="10" rx="2" fill="#eb6834"/><text x="245" y="127" font-size="12" fill="#52514e">v0.9.12</text>
+<line x1="44" x2="444" y1="370.0" y2="370.0" stroke="#e4e3df"/>
+<text x="36" y="374.0" font-size="11" fill="#52514e" text-anchor="end">0</text>
+<line x1="44" x2="444" y1="274.5" y2="274.5" stroke="#e4e3df"/>
+<text x="36" y="278.5" font-size="11" fill="#52514e" text-anchor="end">100</text>
+<line x1="44" x2="444" y1="179.1" y2="179.1" stroke="#e4e3df"/>
+<text x="36" y="183.1" font-size="11" fill="#52514e" text-anchor="end">200</text>
+<path d="M84.0,370 V254.7 Q84.0,250.7 88.0,250.7 H136.0 Q140.0,250.7 140.0,254.7 V370 Z" fill="#2a78d6"/>
+<text x="112.0" y="243.7" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">125</text>
+<path d="M148.0,370 V226.0 Q148.0,222.0 152.0,222.0 H200.0 Q204.0,222.0 204.0,226.0 V370 Z" fill="#eb6834"/>
+<text x="176.0" y="215.0" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">155</text>
+<text x="144.0" y="392" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">Village</text>
+<text x="144.0" y="410" font-size="12" fill="#52514e" text-anchor="middle">+24 %</text>
+<path d="M284.0,370 V220.3 Q284.0,216.3 288.0,216.3 H336.0 Q340.0,216.3 340.0,220.3 V370 Z" fill="#2a78d6"/>
+<text x="312.0" y="209.3" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">161</text>
+<path d="M348.0,370 V187.9 Q348.0,183.9 352.0,183.9 H400.0 Q404.0,183.9 404.0,187.9 V370 Z" fill="#eb6834"/>
+<text x="376.0" y="176.9" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">~195</text>
+<text x="344.0" y="392" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">Home</text>
+<text x="344.0" y="410" font-size="12" fill="#52514e" text-anchor="middle">+21 %</text>
+<text x="484" y="104" font-size="14" font-weight="600" fill="#0b0b0b">AMD Radeon in a Ryzen (1x, Vulkan)</text>
+<rect x="484" y="118" width="10" height="10" rx="2" fill="#2a78d6"/><text x="500" y="127" font-size="12" fill="#52514e">Parallel graphics off</text>
+<rect x="669" y="118" width="10" height="10" rx="2" fill="#eb6834"/><text x="685" y="127" font-size="12" fill="#52514e">On (v0.9.12)</text>
+<line x1="484" x2="884" y1="370.0" y2="370.0" stroke="#e4e3df"/>
+<text x="476" y="374.0" font-size="11" fill="#52514e" text-anchor="end">0</text>
+<line x1="484" x2="884" y1="274.5" y2="274.5" stroke="#e4e3df"/>
+<text x="476" y="278.5" font-size="11" fill="#52514e" text-anchor="end">100</text>
+<line x1="484" x2="884" y1="179.1" y2="179.1" stroke="#e4e3df"/>
+<text x="476" y="183.1" font-size="11" fill="#52514e" text-anchor="end">200</text>
+<path d="M524.0,370 V312.0 Q524.0,308.0 528.0,308.0 H576.0 Q580.0,308.0 580.0,312.0 V370 Z" fill="#2a78d6"/>
+<text x="552.0" y="301.0" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">65</text>
+<path d="M588.0,370 V296.7 Q588.0,292.7 592.0,292.7 H640.0 Q644.0,292.7 644.0,296.7 V370 Z" fill="#eb6834"/>
+<text x="616.0" y="285.7" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">81</text>
+<text x="584.0" y="392" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">Village</text>
+<text x="584.0" y="410" font-size="12" fill="#52514e" text-anchor="middle">+25 %</text>
+<path d="M724.0,370 V322.0 Q724.0,318.0 728.0,318.0 H776.0 Q780.0,318.0 780.0,322.0 V370 Z" fill="#2a78d6"/>
+<text x="752.0" y="311.0" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">54.5</text>
+<path d="M788.0,370 V311.5 Q788.0,307.5 792.0,307.5 H840.0 Q844.0,307.5 844.0,311.5 V370 Z" fill="#eb6834"/>
+<text x="816.0" y="300.5" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">65.5</text>
+<text x="784.0" y="392" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">Home</text>
+<text x="784.0" y="410" font-size="12" fill="#52514e" text-anchor="middle">+20 %</text>
+</svg>
