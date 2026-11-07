@@ -7,6 +7,8 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 ## [Unreleased]
 
 ### Added
+- **A menu in the top-right corner.** The gear next to the window buttons opens a menu with every section of the launcher (installation, graphics, controls, online, saves and logs), a switch for the animations and a button to look for updates. The row of tabs is gone: inside a section, a slim bar with a back button takes you to the main page.
+- **Soft animations.** Pages fade in when you change them, buttons light up smoothly under the mouse, the window appears softly and the PLAY button gently glows while the game is not running. They cost nothing when you are not clicking, they turn off by themselves if Windows has animations off, and there is a switch for them in the menu.
 - **A logo for MH3U NativePC.** A new emblem (a great sword planted in a rock, with the moon and a volcano behind it) is now the icon of `MH3U.exe` and of its window.
 - **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (the hits you take do 0 damage and add no status effects), more zenny and infinite items used in a quest. Two read-only helpers join them: **life bars for the monsters** of the quest and a **damage meter** (what the monsters' life goes down by, yours apart, and your DPS), both drawn over the game. A warning tells you that cheats can alter or corrupt your save before you turn them on.
 - The first time you play after updating, the game is built again (the cheats need new hooks).
@@ -16,6 +18,7 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 - **Cheats that cannot work now tell you.** If a cheat needs a part your compiled game does not have, the launcher says so when you press PLAY and offers to build the game again; the game also says it in its log. The build window warns when the launcher has no hooks list.
 
 ### Changed
+- **The explanations show when the mouse is over an option.** The little texts under the options are now tooltips, and the options that have one start with a 💡.
 - **The program is now called MH3U NativePC.** The window title, the header, the footer, the file properties of `MH3U.exe` and the Discord status say so, and the project page on GitHub moved to `G30vamv/MH3U-NativePC` (the old address keeps working). Nothing changes in how it plays or updates.
 
 ## [0.9.12] - 2026-11-06

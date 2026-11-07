@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import qtanim
+import qtmenu
 import qtshim
 import qtmapping
 import qttitle
@@ -126,6 +128,22 @@ def _hint(text, color="#9db3ba", size=9.5):
     return Label(text, color, size, wrap=0)
 
 
+def _tip(label, text, *others):
+    """The explanation of an option shows when the mouse is over it (on the label and on the widgets in `others`); the label starts
+    with a lightbulb so people know it is there. A leading icon of the label (a stethoscope, a crown...) is replaced by the bulb."""
+    text = text.removeprefix("💡").strip()  # some texts already carry the bulb of the old inline hints
+    for w in (label,) + others:
+        w.setToolTip(qtanim.tip_html(text))
+    shown = label.text()
+    if not shown.startswith("💡"):
+        first = shown.split(" ", 1)
+        if len(first) == 2 and not first[0].isascii() and not first[0].isalnum():
+            shown = first[1]
+        label.setText("💡 " + shown)
+        if hasattr(label, "updateGeometry"):
+            label.updateGeometry()
+
+
 class Window(QWidget):
     def __init__(self, app):
         super().__init__()
@@ -159,6 +177,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.qapp = qapp
         self.assets_dir = get_assets_dir()
         self.config = self.load_config()
+        qtanim.set_user_choice(self.config.get("animations", True))
         self.is_compiling = False
         self.is_running = False
         self.is_downloading_toolchain = False
@@ -304,7 +323,9 @@ class MH3ULauncherApp(LauncherLogic):
         root.addWidget(content, 1)
         content_lay.addWidget(self.create_header())
 
-        self.tabview = TabView()
+        self.pagebar = self._build_pagebar()
+        content_lay.addWidget(self.pagebar)
+        self.tabview = TabView(show_bar=False)
         content_lay.addWidget(self.tabview, 1)
 
         self.tabview.add(TAB_MAIN, self.setup_tab_main())
@@ -315,8 +336,86 @@ class MH3ULauncherApp(LauncherLogic):
         self.tabview.add(TAB_TOOLS, self.setup_tab_tools())
         # Radmin/Tailscale/ZeroTier may have connected after the launcher opened
         self.tabview.changed.connect(lambda key: key == TAB_ONLINE.strip() and self.refresh_local_ips())
+        self._build_menu()
+        self.tabview.changed.connect(self._on_page_changed)
+        self._on_page_changed(self.tabview.current())
+        self.tabview.animate = True  # from here on the pages fade in when they change
 
         content_lay.addWidget(self.create_footer())
+
+    # ---- gear menu, page bar, animations ---------------------------------------------------------
+    def _build_pagebar(self):
+        bar = QWidget()
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(2, 0, 2, 0)
+        lay.setSpacing(12)
+        lay.addWidget(Button("←  Principal", "default", lambda: self.tabview.set(TAB_MAIN), width=128, height=30, size=10))
+        self.lbl_page = Label("", "#eab84c", 13, bold=True)
+        lay.addWidget(self.lbl_page)
+        lay.addStretch(1)
+        return bar
+
+    def _build_menu(self):
+        self.menu = qtmenu.SettingsMenu(self.window)
+        gear = self.titlebar.btn_menu
+
+        def closed():
+            gear.menu_open = False
+            gear.update()
+
+        self.menu.on_hidden = closed
+        for tab in (TAB_MAIN, TAB_INSTALL, TAB_SETTINGS, TAB_CONTROLS, TAB_ONLINE, TAB_TOOLS):
+            self.menu.add_page(tab.strip(), tab, lambda t=tab: self.tabview.set(t))
+        self.menu.add_separator()
+        self.sw_animations = self.menu.add_switch(
+            "💡 Animaciones",
+            bool(self.config.get("animations", True)),
+            self.on_animations_toggled,
+            qtanim.tip_html(
+                "Suaviza los cambios de página, los botones y la entrada del launcher. Se desactivan solas si Windows tiene "
+                "las animaciones apagadas."
+            ),
+        )
+        self.menu.add_action("🔄  Buscar actualizaciones", self.on_update_button)
+        gear.clicked.connect(self.open_menu)
+
+    def open_menu(self):
+        if self.menu.isVisible():
+            self.menu.close()
+            return
+        self.titlebar.btn_menu.menu_open = True
+        self.titlebar.btn_menu.update()
+        self.menu.popup_below(self.titlebar.btn_menu)
+
+    def _on_page_changed(self, key):
+        self.menu.set_current(key)
+        main = key == TAB_MAIN.strip()
+        self.pagebar.setVisible(not main)
+        for tab in (TAB_INSTALL, TAB_SETTINGS, TAB_CONTROLS, TAB_ONLINE, TAB_TOOLS):
+            if tab.strip() == key:
+                self.lbl_page.setText(tab.strip())
+
+    def on_animations_toggled(self):
+        on = bool(self.sw_animations.get())
+        self.config["animations"] = on
+        self.save_config()
+        qtanim.set_user_choice(on)
+        glow = getattr(self, "_glow", None)
+        if glow:
+            glow.refresh()
+
+    def _glow_allowed(self):
+        """The PLAY button breathes only while it is useful: window in front, game not running, on the main page."""
+        w = self.window
+        return (
+            qtanim.enabled()
+            and not self.is_running
+            and self.btn_play.isEnabled()
+            and w.isVisible()
+            and w.isActiveWindow()
+            and not w.isMinimized()
+            and self.tabview.current() == TAB_MAIN.strip()
+        )
 
     def create_header(self):
         header = BannerPanel(os.path.join(self.assets_dir, "banner.png"), "card", 20)
@@ -379,6 +478,7 @@ class MH3ULauncherApp(LauncherLogic):
 
         self.btn_play = Button("⚔️  JUGAR MONSTER HUNTER 3 ULTIMATE", "teal", self.launch_game, height=64, size=16)
         lay.addWidget(self.btn_play)
+        self._glow = qtanim.Glow(self.btn_play, self._glow_allowed)
 
         row = QHBoxLayout()
         row.setSpacing(12)
@@ -538,7 +638,8 @@ class MH3ULauncherApp(LauncherLogic):
 
         gfx, g = _card("card")
         g.addWidget(Label("Opciones Gráficas", "#4fc3d6", 12.5, bold=True))
-        g.addWidget(Label("Escala de Resolución Interna:", None, 10.5, bold=True))
+        lbl_scale = Label("Escala de Resolución Interna:", None, 10.5, bold=True)
+        g.addWidget(lbl_scale)
         self.opt_scale = Segmented(["1x (720p)", "2x (1440p 2K)", "3x (4K UHD)", "4x (5K Ultra)"], self.on_scale_changed)
         scale_map = {
             "1": "1x (720p)", "2": "2x (1440p 2K)", "3": "3x (4K UHD)", "4": "4x (5K Ultra)",
@@ -546,13 +647,13 @@ class MH3ULauncherApp(LauncherLogic):
         }
         self.opt_scale.set(scale_map.get(str(self.config.get("scale", "2")), "2x (1440p 2K)"))
         g.addWidget(self.opt_scale)
-        info = _hint(
+        _tip(
+            lbl_scale,
             "Resolución a la que se dibuja el juego (base Wii U 1280x720 × factor entero); es independiente del reescalado FSR.\n"
-            "1x (720p): nativo, 60 FPS seguros  |  2x (1440p): 4x píxeles, nítido en monitores 1080p/1440p\n"
-            "3x (4K UHD): 9x píxeles  |  4x (5K): 16x píxeles (GPUs potentes)"
+            "1x (720p): nativo, 60 FPS seguros.\n2x (1440p): 4x píxeles, nítido en monitores 1080p/1440p.\n"
+            "3x (4K UHD): 9x píxeles.\n4x (5K): 16x píxeles (GPUs potentes).",
+            self.opt_scale,
         )
-        info.setWordWrap(True)
-        g.addWidget(info)
 
         self.chk_fullscreen = CheckBox("Pantalla Completa sin bordes (Borderless)", self.save_settings_from_ui)
         if self.config.get("fullscreen", True):
@@ -562,45 +663,50 @@ class MH3ULauncherApp(LauncherLogic):
         if self.config.get("fps", False):
             self.chk_fps.select()
         g.addWidget(self.chk_fps)
-        g.addWidget(Label("Gráficos en paralelo (más FPS):", None, 10.5, bold=True))
+        lbl_parallel = Label("Gráficos en paralelo (más FPS):", None, 10.5, bold=True)
+        g.addWidget(lbl_parallel)
         # an older config file may hold "on" (forced on): that choice is shown, but the window no longer offers it
         parallel = gpu_thread_mode(self.config)
         self.opt_gpu_thread = Segmented(
             ["Automático (recomendado)", "Apagado"] + (["Siempre activado"] if parallel == "on" else []), self.on_gpu_thread_changed
         )
         self.opt_gpu_thread.set({"on": "Siempre activado", "off": "Apagado"}.get(parallel, "Automático (recomendado)"))
-        self.opt_gpu_thread.setToolTip(
-            "Reparte el trabajo gráfico entre varios núcleos del procesador para subir los FPS, sobre todo en procesadores lentos.\n"
-            "Automático: se activa solo con tarjetas NVIDIA y AMD; con Intel se queda apagado (aún sin probar).\n"
-            "Apagado: úsalo si ves parpadeos o cosas que desaparecen, o si el juego se congela."
-        )
         g.addWidget(self.opt_gpu_thread)
-        g.addWidget(_hint("💡 Automático es lo recomendado. Si ves parpadeos o el juego se congela, prueba Apagado."))
+        _tip(
+            lbl_parallel,
+            "Reparte el trabajo gráfico entre varios núcleos del procesador para subir los FPS, sobre todo en procesadores lentos.\n"
+            "Automático (recomendado): se activa solo con tarjetas NVIDIA y AMD; con Intel se queda apagado (aún sin probar).\n"
+            "Apagado: úsalo si ves parpadeos o cosas que desaparecen, o si el juego se congela.",
+            self.opt_gpu_thread,
+        )
 
-        g.addWidget(Label("Motor Gráfico (Backend):", None, 10.5, bold=True))
+        lbl_backend = Label("Motor Gráfico (Backend):", None, 10.5, bold=True)
+        g.addWidget(lbl_backend)
         self.opt_backend = Segmented(["Vulkan (Recomendado)", "DirectX 12 (DX12)"], self.on_backend_changed)
         self.opt_backend.set("DirectX 12 (DX12)" if self.config.get("gfx_backend", "vulkan") == "dx12" else "Vulkan (Recomendado)")
         g.addWidget(self.opt_backend)
-        g.addWidget(_hint("💡 Usa DirectX 12 si tienes gráfica integrada Intel o notas tirones con Vulkan."))
+        _tip(lbl_backend, "Usa DirectX 12 si tienes gráfica integrada Intel o notas tirones con Vulkan.", self.opt_backend)
 
-        g.addWidget(Label("Sincronización Vertical (VSync):", None, 10.5, bold=True))
+        lbl_vsync = Label("Sincronización Vertical (VSync):", None, 10.5, bold=True)
+        g.addWidget(lbl_vsync)
         self.opt_present = Segmented(["Mailbox (Fast-Sync)", "VSync Clásico (Fifo)", "Desactivado (OFF)"], self.on_present_changed)
         present_map = {"mailbox": "Mailbox (Fast-Sync)", "fifo": "VSync Clásico (Fifo)", "immediate": "Desactivado (OFF)"}
         self.opt_present.set(present_map.get(self.config.get("present_mode", "mailbox"), "Mailbox (Fast-Sync)"))
         g.addWidget(self.opt_present)
-        g.addWidget(_hint("💡 Mailbox evita tirones y reduce la latencia al mínimo sin cortes de pantalla."))
+        _tip(lbl_vsync, "Mailbox evita tirones y reduce la latencia al mínimo sin cortes de pantalla.", self.opt_present)
 
-        g.addWidget(Label("Tecnología de Reescalado & Nitidez:", None, 10.5, bold=True))
+        lbl_upscaler = Label("Tecnología de Reescalado & Nitidez:", None, 10.5, bold=True)
+        g.addWidget(lbl_upscaler)
         self.opt_upscaler = Segmented(["FSR 1.0 (EASU + RCAS)", "AMD CAS (Solo Nitidez)", "Desactivado (Nativo)"], self.on_upscaler_changed)
         upscaler = self.config.get("upscaler", "fsr")
         self.opt_upscaler.set({"cas": "AMD CAS (Solo Nitidez)", "off": "Desactivado (Nativo)"}.get(upscaler, "FSR 1.0 (EASU + RCAS)"))
         g.addWidget(self.opt_upscaler)
-        hint = _hint(
-            "💡 FSR escala la imagen solo si la resolución interna es menor que la de tu ventana (p. ej. 1x = 720p en un monitor 1080p o 1440p). "
-            "Con 2x o más en un monitor 1080p ya hay de sobra y solo se aplica el afilado."
+        _tip(
+            lbl_upscaler,
+            "FSR escala la imagen solo si la resolución interna es menor que la de tu ventana (p. ej. 1x = 720p en un monitor 1080p o 1440p). "
+            "Con 2x o más en un monitor 1080p ya hay de sobra y solo se aplica el afilado.",
+            self.opt_upscaler,
         )
-        hint.setWordWrap(True)
-        g.addWidget(hint)
 
         sharp, sl = _card("inset", 12)
         head = QHBoxLayout()
@@ -615,18 +721,19 @@ class MH3ULauncherApp(LauncherLogic):
         sl.addWidget(self.slider_sharpness)
         g.addWidget(sharp)
 
-        g.addWidget(Label("Idioma del panel del juego (F1):", None, 10.5, bold=True))
+        lbl_lang = Label("Idioma del panel del juego (F1):", None, 10.5, bold=True)
+        g.addWidget(lbl_lang)
         self.opt_ui_language = Segmented(["Automático", "Español", "English"], self.on_ui_language_changed)
         self.opt_ui_language.set({"es": "Español", "en": "English"}.get(self.config.get("ui_language", "auto"), "Automático"))
         g.addWidget(self.opt_ui_language)
-        g.addWidget(_hint("💡 Idioma de los ajustes y del teclado dentro del juego. «Automático» sigue el idioma de Windows."))
+        _tip(lbl_lang, "Idioma de los ajustes y del teclado dentro del juego. «Automático» sigue el idioma de Windows.", self.opt_ui_language)
 
         g.addWidget(Label("Ventana", None, 10.5, bold=True))
         self.chk_acrylic = CheckBox("Efecto Acrylic (el escritorio se transparenta; reinicia el launcher)", self.on_acrylic_toggled)
         if self.config.get("acrylic", False):
             self.chk_acrylic.select()
         g.addWidget(self.chk_acrylic)
-        g.addWidget(_hint("💡 Si usas Windows 10, déjalo desactivado: solo funciona en Windows 11."))
+        _tip(self.chk_acrylic, "Si usas Windows 10, déjalo desactivado: solo funciona en Windows 11.")
 
         g.addWidget(Label("Audio & Efectos", None, 10.5, bold=True))
         self.chk_audio = CheckBox("Sonido Activado (CPAL WASAPI)", self.save_settings_from_ui)
@@ -693,7 +800,7 @@ class MH3ULauncherApp(LauncherLogic):
                 row.addWidget(entry)
             row.addStretch(1)
             r.addLayout(row)
-            r.addWidget(_hint(c["hint"]))
+            _tip(chk, c["hint"])
         r.addStretch(1)
         cols.addWidget(right, 1, Qt.AlignmentFlag.AlignTop)
         return _transparent_scroll(inner)
@@ -799,7 +906,8 @@ class MH3ULauncherApp(LauncherLogic):
 
         stick, st = _card("inset", 12)
         head = QHBoxLayout()
-        head.addWidget(Label("Sensibilidad de Cámara (Stick derecho del mando):", None, 10, bold=True))
+        lbl_stick = Label("Sensibilidad de Cámara (Stick derecho del mando):", None, 10, bold=True)
+        head.addWidget(lbl_stick)
         head.addStretch(1)
         raw_stick = int(self.config.get("right_stick_sens", 100))
         self.lbl_stick_val = Label(f"{raw_stick}%", "#4fc3d6", 10, bold=True)
@@ -808,7 +916,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.slider_stick = Slider(25, 150, self.on_right_stick_changed)
         self.slider_stick.set(raw_stick)
         st.addWidget(self.slider_stick)
-        st.addWidget(_hint("💡 100% es lo que reporta el mando; baja el valor si la cámara se siente demasiado rápida. También se cambia dentro del juego (F2)."))
+        _tip(lbl_stick, "100% es lo que reporta el mando; baja el valor si la cámara se siente demasiado rápida. También se cambia dentro del juego (F2).", self.slider_stick)
         bl.addWidget(stick)
         lay.addWidget(base)
         lay.addStretch(1)
@@ -861,8 +969,9 @@ class MH3ULauncherApp(LauncherLogic):
         self.seg_online_mode.set(init_mode)
         tl.addWidget(self.seg_online_mode)
         diag_row = QHBoxLayout()
-        diag_row.addWidget(Button("🩺 Diagnóstico de Red", "default", self.run_diagnostics, width=190))
-        diag_row.addWidget(_hint("Revisa el firewall, tu IP y la conexión con tu amigo. Lo que escribas aquí se guarda solo al pulsar JUGAR."))
+        btn_diag = Button("🩺 Diagnóstico de Red", "default", self.run_diagnostics, width=190)
+        _tip(btn_diag, "Revisa el firewall, tu IP y la conexión con tu amigo. Lo que escribas aquí se guarda solo al pulsar JUGAR.")
+        diag_row.addWidget(btn_diag)
         diag_row.addStretch(1)
         tl.addLayout(diag_row)
         lay.addWidget(top)
@@ -895,8 +1004,9 @@ class MH3ULauncherApp(LauncherLogic):
 
         # host
         self.frame_host_mode, h = _grid_card("card")
-        h.addWidget(Label("👑 Servidor de Salas Integrado (Crear Partida)", "#eab84c", 11.5, bold=True), 0, 0, 1, 2)
-        h.addWidget(_hint("Inicia el servidor de retransmisión local para que tus amigos se conecten contigo a Puerto Tanzia."), 1, 0, 1, 2)
+        lbl_server = Label("👑 Servidor de Salas Integrado (Crear Partida)", "#eab84c", 11.5, bold=True)
+        _tip(lbl_server, "Inicia el servidor de retransmisión local para que tus amigos se conecten contigo a Puerto Tanzia.")
+        h.addWidget(lbl_server, 0, 0, 1, 2)
         h.addWidget(Label("Tu IP para amigos:"), 2, 0)
         ip_row = QHBoxLayout()
         ips = get_local_ip_addresses()
@@ -976,10 +1086,12 @@ class MH3ULauncherApp(LauncherLogic):
 
 def main():
     qapp = QApplication(sys.argv)
+    qapp.setStyle(qtanim.TipStyle())
     qapp.setStyleSheet(STYLE)
     qapp.setFont(font(10.5))
     qtshim.init_threading()
     app = MH3ULauncherApp(qapp)
+    qtanim.fade_window_in(app.window)
     app.show()
     return qapp.exec()
 

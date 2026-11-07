@@ -1,7 +1,9 @@
 """A title bar drawn inside the window (the window has no native frame), with the resize grips a framed window has."""
 
+import math
+
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLabel, QWidget
 
 from qtshim import GOLD, GOLD_HOVER, PARCHMENT, font
@@ -10,12 +12,13 @@ GRIP = 6  # width of the edges that resize the window
 
 
 class _CaptionButton(QAbstractButton):
-    """Minimize / maximize / close; turns palette gold under the mouse."""
+    """Menu (the gear) / minimize / maximize / close; turns palette gold under the mouse."""
 
     def __init__(self, kind, parent=None):
         super().__init__(parent)
         self.kind = kind
         self.maximized = False
+        self.menu_open = False  # the gear stays lit while its menu is open
         self.setFixedSize(46, 32)
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -23,7 +26,7 @@ class _CaptionButton(QAbstractButton):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        hot = self.underMouse()
+        hot = self.underMouse() or self.menu_open
         if hot:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(GOLD_HOVER if self.isDown() else GOLD))
@@ -33,7 +36,18 @@ class _CaptionButton(QAbstractButton):
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         cx, cy = self.width() / 2, self.height() / 2
-        if self.kind == "min":
+        if self.kind == "gear":
+            # a cog: eight teeth round a ring, with a hole in the middle
+            path = QPainterPath()
+            for k in range(8):
+                a = math.radians(k * 45)
+                for da, r in ((-13, 4.6), (-7, 7.2), (7, 7.2), (13, 4.6)):
+                    pt = QPointF(cx + r * math.cos(a + math.radians(da)), cy + r * math.sin(a + math.radians(da)))
+                    path.moveTo(pt) if (k == 0 and da == -13) else path.lineTo(pt)
+            path.closeSubpath()
+            p.drawPath(path)
+            p.drawEllipse(QPointF(cx, cy), 2.3, 2.3)
+        elif self.kind == "min":
             p.drawLine(QPointF(cx - 5, cy + 1), QPointF(cx + 5, cy + 1))
         elif self.kind == "max":
             if self.maximized:
@@ -73,6 +87,9 @@ class TitleBar(QWidget):
         label.setStyleSheet(f"color: {PARCHMENT}; background: transparent;")
         lay.addWidget(label)
         lay.addStretch(1)
+        self.btn_menu = _CaptionButton("gear")  # opens the launcher's menu (see qtmenu)
+        self.btn_menu.setToolTip("Menú del launcher: instalación, gráficos, controles, online, partidas y más")
+        lay.addWidget(self.btn_menu)
         self.btn_min = _CaptionButton("min")
         self.btn_max = _CaptionButton("max")
         self.btn_close = _CaptionButton("close")

@@ -6,6 +6,7 @@ and so on, plus message boxes and folder dialogs that can be called from any thr
 
 import threading
 
+import qtanim
 from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -159,38 +160,69 @@ class Label(QLabel):
 
 
 class Button(QPushButton):
+    """A button painted here (so its colour can follow the mouse softly); `configure` keeps the CTk-like API of the logic."""
+
     def __init__(self, text="", kind="default", command=None, width=None, height=34, size=10.5, bold=True, parent=None):
         super().__init__(tx(text), parent)
-        self._fg, self._hover, self._tc = BUTTON_KINDS[kind]
+        self._fg, self._hover_c, self._tc = BUTTON_KINDS[kind]
         self._command = None
+        self.glow = 0.0  # 0..1, set by qtanim.Glow on the PLAY button
         self.setFont(font(size, bold))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(height)
         if width:
             self.setMinimumWidth(width)
+        self._anim = qtanim.hover_animation(self)
         self.configure(command=command)
-        self._restyle()
 
-    def _restyle(self):
-        self.setStyleSheet(
-            f"""
-            QPushButton {{ background: {self._fg}; color: {self._tc}; border: 1px solid rgba(255,255,255,40);
-                          border-radius: 10px; padding: 4px 16px; }}
-            QPushButton:hover {{ background: {self._hover}; border: 1px solid rgba(255,255,255,90); }}
-            QPushButton:pressed {{ padding-top: 6px; }}
-            QPushButton:disabled {{ background: rgba(60,80,90,150); color: rgba(227,216,189,110); border: 1px solid rgba(255,255,255,20); }}
-            """
-        )
+    def _shown_text(self):
+        return self.text().replace("&&", "&")
+
+    def sizeHint(self):
+        fm = self.fontMetrics()
+        return QSize(max(fm.horizontalAdvance(self._shown_text()) + 34, self.minimumWidth()), max(fm.height() + 10, self.minimumHeight()))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isEnabled():
+            t = self._hover
+            bg = qtanim.mix(QColor(self._fg), QColor(self._hover_c), t)
+            if self.glow:
+                bg = qtanim.mix(bg, QColor("#4fc9ba"), self.glow * 0.4)
+            border = QColor(255, 255, 255, round(40 + 50 * max(t, self.glow * 0.8)))
+            text = QColor(self._tc)
+        else:
+            bg, border, text = QColor(60, 80, 90, 150), QColor(255, 255, 255, 20), QColor(227, 216, 189, 110)
+        p.setPen(QPen(border, 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        p.setPen(text)
+        p.setFont(self.font())
+        dy = 1 if (self.isDown() and self.isEnabled()) else 0
+        p.drawText(QRectF(self.rect()).adjusted(8, dy, -8, dy), Qt.AlignmentFlag.AlignCenter, self._shown_text())
+
+    def enterEvent(self, event):
+        qtanim.hover_to(self, self._anim, 1)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        qtanim.hover_to(self, self._anim, 0)
+        super().leaveEvent(event)
 
     def configure(self, **kw):
         if "text" in kw:
             self.setText(tx(kw["text"]))
+            self.updateGeometry()
         if "state" in kw:
             self.setEnabled(kw["state"] != "disabled")
         if "fg_color" in kw:
             self._fg = kw["fg_color"]
         if "hover_color" in kw:
-            self._hover = kw["hover_color"]
+            self._hover_c = kw["hover_color"]
         if "text_color" in kw:
             self._tc = kw["text_color"]
         if "command" in kw:
@@ -203,8 +235,8 @@ class Button(QPushButton):
             self._command = (lambda checked=False, c=command: c()) if command else None
             if self._command:
                 self.clicked.connect(self._command)
-        if any(k in kw for k in ("fg_color", "hover_color", "text_color")):
-            self._restyle()
+        if any(k in kw for k in ("fg_color", "hover_color", "text_color", "state", "text")):
+            self.update()
 
 
 class Entry(QLineEdit):
@@ -444,9 +476,11 @@ class TabView(QWidget):
 
     changed = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_bar=True):
         super().__init__(parent)
         from PySide6.QtWidgets import QVBoxLayout
+
+        self.animate = False  # the pages fade in once the window is built (set by the app)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -461,6 +495,7 @@ class TabView(QWidget):
         lay.addWidget(self.stack, 1)
         self._pages = {}
         self._buttons = {}
+        self.bar.setVisible(show_bar)
         self.bar.setStyleSheet(
             f"""
             #tabbar {{ background: rgba(8,20,28,170); border: 1px solid rgba(255,255,255,40); border-radius: 18px; }}
@@ -487,7 +522,18 @@ class TabView(QWidget):
         key = name.strip()
         if key not in self._pages:
             return
-        self.stack.setCurrentWidget(self._pages[key])
+        page = self._pages[key]
+        moved = self.stack.currentWidget() is not page
+        self.stack.setCurrentWidget(page)
         for k, b in self._buttons.items():
             b.setChecked(k == key)
+        if moved and self.animate:
+            qtanim.fade_in(page, 170)
         self.changed.emit(key)
+
+    def current(self):
+        """The name (as given to `add`, without the spaces around it) of the page showing."""
+        for k, page in self._pages.items():
+            if page is self.stack.currentWidget():
+                return k
+        return None
