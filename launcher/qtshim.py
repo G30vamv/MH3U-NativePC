@@ -7,8 +7,8 @@ and so on, plus message boxes and folder dialogs that can be called from any thr
 import threading
 
 import qtanim
-from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEasingCurve, QObject, QPointF, QRectF, QSize, Qt, QVariantAnimation, Signal
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
@@ -188,18 +188,34 @@ class Button(QPushButton):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        shape = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         if self.isEnabled():
             t = self._hover
             bg = qtanim.mix(QColor(self._fg), QColor(self._hover_c), t)
-            if self.glow:
-                bg = qtanim.mix(bg, QColor("#4fc9ba"), self.glow * 0.4)
-            border = QColor(255, 255, 255, round(40 + 50 * max(t, self.glow * 0.8)))
+            border = qtanim.mix(QColor(255, 255, 255, 40), QColor(242, 201, 104, 210), t)
+            width = 1.0
+            if self.glow:  # the PLAY button breathes in the gold of the palette: a gold edge and a gold line inside it
+                bg = qtanim.mix(bg, QColor("#3bb3a4"), self.glow * 0.35)
+                border = qtanim.mix(border, QColor(242, 201, 104, 255), self.glow)
+                width = 1.0 + 2.0 * self.glow
             text = QColor(self._tc)
         else:
+            t, width = 0.0, 1.0
             bg, border, text = QColor(60, 80, 90, 150), QColor(255, 255, 255, 20), QColor(227, 216, 189, 110)
-        p.setPen(QPen(border, 1))
+        p.setPen(QPen(border, width))
         p.setBrush(bg)
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        p.drawRoundedRect(shape, 10, 10)
+        if self.glow > 0.05 and self.isEnabled():
+            p.setPen(QPen(QColor(242, 201, 104, round(120 * self.glow)), 1.2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(shape.adjusted(4, 4, -4, -4), 7, 7)
+        if t > 0:  # a soft light on the upper half while the mouse is over it
+            light = QLinearGradient(0, 0, 0, self.height())
+            light.setColorAt(0.0, QColor(255, 255, 255, round(46 * t)))
+            light.setColorAt(0.6, QColor(255, 255, 255, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(light)
+            p.drawRoundedRect(shape, 10, 10)
         p.setPen(text)
         p.setFont(self.font())
         dy = 1 if (self.isDown() and self.isEnabled()) else 0
@@ -271,8 +287,28 @@ class _Toggle(QAbstractButton):
         self.setFont(font(10.5, bold=switch))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._switch = switch
+        self._knob = 0.0  # 0 = off, 1 = on: where the knob of a switch is
+        self._knob_anim = QVariantAnimation(self)
+        self._knob_anim.setDuration(190)
+        self._knob_anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._knob_anim.valueChanged.connect(self._knob_step)
+        self.toggled.connect(self._moved)
         if command:
             self.clicked.connect(lambda checked=False: command())
+
+    def _knob_step(self, v):
+        self._knob = float(v)
+        self.update()
+
+    def _moved(self, on):
+        self._knob_anim.stop()
+        if not self._switch or not self.isVisible() or not qtanim.enabled():
+            self._knob = 1.0 if on else 0.0
+            self.update()
+            return
+        self._knob_anim.setStartValue(self._knob)
+        self._knob_anim.setEndValue(1.0 if on else 0.0)
+        self._knob_anim.start()
 
     def get(self):
         return 1 if self.isChecked() else 0
@@ -295,12 +331,13 @@ class _Toggle(QAbstractButton):
         y = (self.height() - 22) / 2
         if self._switch:
             track = QRectF(1, y + 2, 40, 18)
+            k = max(0.0, min(1.0, self._knob))
             p.setPen(QPen(QColor(255, 255, 255, 60), 1))
-            p.setBrush(QColor(TEAL if on else "#1b3441"))
+            p.setBrush(qtanim.mix(QColor("#1b3441"), QColor(TEAL), k))
             p.drawRoundedRect(track, 9, 9)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor("#f2c968" if hover else "#eab84c"))
-            x = 23 if on else 3
+            x = 3 + 20 * self._knob
             p.drawEllipse(QRectF(x, y + 4, 14, 14))
             left = 52
         else:
@@ -471,6 +508,105 @@ class LogBox(QPlainTextEdit):
         self.clear()
 
 
+def plain(name):
+    """A tab's name without the icon that starts it."""
+    n = name.strip()
+    first = n.split(" ", 1)
+    if len(first) == 2 and not first[0].isascii():
+        return first[1].strip()
+    return n
+
+
+class _TabButton(QAbstractButton):
+    """One tab: text only, a light under the mouse that fades in and out."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.setCheckable(True)
+        self.setFont(font(10.5, bold=True))
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._anim = qtanim.hover_animation(self)
+
+    def sizeHint(self):
+        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 38, 34)
+
+    def enterEvent(self, event):
+        qtanim.hover_to(self, self._anim, 1)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        qtanim.hover_to(self, self._anim, 0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isChecked() and self._hover > 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, round(40 * self._hover)))
+            p.drawRoundedRect(QRectF(self.rect()), 14, 14)
+        color = QColor("#fff6e0") if self.isChecked() else qtanim.mix(QColor(PARCHMENT), QColor("#ffffff"), self._hover)
+        p.setPen(color)
+        p.setFont(self.font())
+        p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter, self.text())
+
+
+class _TabBar(QFrame):
+    """The bar of the tabs: it paints the gold pill under the tab that is showing, and the pill slides to the next one."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("tabbar")
+        self.pill = None  # QRectF, in the bar's coordinates
+        self.on_resize = None
+        self._slide = QVariantAnimation(self)
+        self._slide.setDuration(300)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._slide.valueChanged.connect(self._slide_step)
+
+    def _slide_step(self, rect):
+        self.pill = QRectF(rect)
+        self.update()
+
+    def move_pill(self, target, animate):
+        target = QRectF(target)
+        self._slide.stop()
+        if animate and qtanim.enabled() and self.pill is not None and self.isVisible():
+            self._slide.setStartValue(QRectF(self.pill))
+            self._slide.setEndValue(target)
+            self._slide.start()
+        else:
+            self.pill = target
+            self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.on_resize:
+            self.on_resize()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.on_resize:
+            self.on_resize()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        p.setBrush(QColor(8, 20, 28, 170))
+        p.drawRoundedRect(r, 18, 18)
+        if self.pill is not None:
+            g = QLinearGradient(0, self.pill.top(), 0, self.pill.bottom())
+            g.setColorAt(0.0, QColor(GOLD_HOVER))
+            g.setColorAt(1.0, QColor(GOLD))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(g)
+            p.drawRoundedRect(self.pill, 14, 14)
+
+
 class TabView(QWidget):
     """A row of tab buttons over a stack of pages."""
 
@@ -485,8 +621,7 @@ class TabView(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
-        self.bar = QFrame()
-        self.bar.setObjectName("tabbar")
+        self.bar = _TabBar()
         self._bar_lay = QHBoxLayout(self.bar)
         self._bar_lay.setContentsMargins(5, 5, 5, 5)
         self._bar_lay.setSpacing(4)
@@ -496,20 +631,10 @@ class TabView(QWidget):
         self._pages = {}
         self._buttons = {}
         self.bar.setVisible(show_bar)
-        self.bar.setStyleSheet(
-            f"""
-            #tabbar {{ background: rgba(8,20,28,170); border: 1px solid rgba(255,255,255,40); border-radius: 18px; }}
-            #tabbar QPushButton {{ background: transparent; color: {PARCHMENT}; border: none; border-radius: 14px; padding: 6px 16px; }}
-            #tabbar QPushButton:hover {{ background: rgba(255,255,255,26); }}
-            #tabbar QPushButton:checked {{ background: {GOLD}; color: #fff6e0; }}
-            """
-        )
+        self.bar.on_resize = self._snap_pill
 
     def add(self, name, page):
-        b = QPushButton(tx(name))
-        b.setCheckable(True)
-        b.setFont(font(10.5, bold=True))
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b = _TabButton(plain(name))
         b.clicked.connect(lambda checked=False, n=name: self.set(n))
         self._bar_lay.addWidget(b)
         self.stack.addWidget(page)
@@ -527,9 +652,19 @@ class TabView(QWidget):
         self.stack.setCurrentWidget(page)
         for k, b in self._buttons.items():
             b.setChecked(k == key)
+        self._place_pill(animate=moved and self.animate)
         if moved and self.animate:
-            qtanim.fade_in(page, 170)
+            qtanim.reveal(page, 260, 18)
         self.changed.emit(key)
+
+    def _place_pill(self, animate):
+        key = self.current()
+        b = self._buttons.get(key)
+        if b is not None and b.width() > 0:
+            self.bar.move_pill(b.geometry(), animate)
+
+    def _snap_pill(self):
+        self._place_pill(animate=False)
 
     def current(self):
         """The name (as given to `add`, without the spaces around it) of the page showing."""

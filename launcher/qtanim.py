@@ -7,9 +7,11 @@ reduce animations.
 """
 
 import ctypes
+import math
 import sys
 
-from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QTimer, QVariantAnimation
+from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QTimer, QVariantAnimation
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QProxyStyle, QStyle
 
 _user_wants = True  # the "Animaciones" switch of the menu
@@ -40,34 +42,64 @@ def enabled():
     return _user_wants and windows_allows()
 
 
-def fade_in(widget, ms=170):
-    """Fades a widget in with an opacity effect that is taken off again at the end (an effect left on makes every repaint slower)."""
+def reveal(widget, ms=260, dy=18, delay=0):
+    """Fades a widget in while it rises `dy` pixels into its place (an opacity effect, taken off at the end: an effect left on makes
+    every repaint slower). With a `delay` the widget waits invisible, so several can come in one after the other."""
     if not enabled() or not widget.isVisible():
         return
-    old = getattr(widget, "_fade", None)
+    old = getattr(widget, "_reveal", None)
     if old is not None:
-        old.stop()
+        old[0].stop()
+        if old[1].graphicsEffect() is old[2]:
+            old[1].setGraphicsEffect(None)
+    end = widget.geometry()
     effect = QGraphicsOpacityEffect(widget)
     effect.setOpacity(0.0)
     widget.setGraphicsEffect(effect)
-    anim = QPropertyAnimation(effect, b"opacity", widget)
-    anim.setDuration(ms)
-    anim.setStartValue(0.0)
-    anim.setEndValue(1.0)
-    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    fade = QPropertyAnimation(effect, b"opacity", widget)
+    fade.setDuration(ms)
+    fade.setStartValue(0.0)
+    fade.setEndValue(1.0)
+    fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+    slide = None
+    if dy:
+        slide = QPropertyAnimation(widget, b"pos", widget)
+        slide.setDuration(ms)
+        slide.setStartValue(end.topLeft() + QPoint(0, dy))
+        slide.setEndValue(end.topLeft())
+        slide.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def done():
         if widget.graphicsEffect() is effect:
             widget.setGraphicsEffect(None)
-        widget._fade = None
+        if dy and widget.pos() != end.topLeft() and widget.geometry().size() == end.size():
+            widget.move(end.topLeft())
+        widget._reveal = None
 
-    anim.finished.connect(done)
-    widget._fade = anim
-    anim.start()
+    fade.finished.connect(done)
+
+    def go():
+        if widget._reveal is None:
+            return
+        if slide is not None:
+            widget.move(end.topLeft() + QPoint(0, dy))
+            slide.start()
+        fade.start()
+
+    widget._reveal = (fade, widget, effect)
+    if delay:
+        QTimer.singleShot(delay, go)
+    else:
+        go()
 
 
-def fade_window_in(window, ms=300):
-    """The window appears softly (the desktop composes it, so it costs the launcher nothing)."""
+def fade_in(widget, ms=170):
+    """A plain fade (no movement)."""
+    reveal(widget, ms, 0)
+
+
+def fade_window_in(window, ms=200):
+    """The window appears at once but softly (the desktop composes it, so it costs the launcher nothing)."""
     if not enabled():
         window.setWindowOpacity(1.0)
         return
@@ -81,7 +113,13 @@ def fade_window_in(window, ms=300):
     anim.start()
 
 
-def hover_animation(owner, ms=140):
+def intro(parts, first_delay=60, step=90, ms=420):
+    """The parts of the window (header, tabs, page, footer) come in one after the other, rising a little, when the launcher opens."""
+    for i, part in enumerate(parts):
+        reveal(part, ms, 16, first_delay + step * i)
+
+
+def hover_animation(owner, ms=180):
     """A 0..1 value that follows the mouse: `owner._hover` is set and `owner.update()` called on each step."""
     owner._hover = 0.0
     anim = QVariantAnimation(owner)
@@ -110,8 +148,6 @@ def hover_to(owner, anim, target):
 
 def mix(a, b, t):
     """Blends two QColor (t = 0 gives a, t = 1 gives b)."""
-    from PySide6.QtGui import QColor
-
     return QColor(
         round(a.red() + (b.red() - a.red()) * t),
         round(a.green() + (b.green() - a.green()) * t),
@@ -121,13 +157,13 @@ def mix(a, b, t):
 
 
 class Glow(QObject):
-    """A slow breathing of one widget (the PLAY button): `target.glow` goes 0..1..0 about every 2.8 s, at 25 frames a second.
+    """A slow breathing of one widget (the PLAY button): `target.glow` goes 0..1..0 about every 2.4 s, at 25 frames a second.
 
     It only runs while `allowed()` says so (window in front, game not running, animations on); otherwise the timer is stopped and
     the widget goes back to rest, so a launcher left open beside the game costs nothing.
     """
 
-    PERIOD = 2.8
+    PERIOD = 2.4
 
     def __init__(self, target, allowed, parent=None):
         super().__init__(parent or target)
@@ -152,8 +188,6 @@ class Glow(QObject):
             self._target.update()
 
     def _tick(self):
-        import math
-
         self._t += 0.04 / self.PERIOD
         self._target.glow = (1 - math.cos(2 * math.pi * self._t)) / 2
         self._target.update()

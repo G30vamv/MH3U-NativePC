@@ -315,17 +315,17 @@ class MH3ULauncherApp(LauncherLogic):
             icon_path if os.path.exists(icon_path) else None,
         )
         root.addWidget(self.titlebar)
+        self._build_menu()
 
         content = QWidget()
         content_lay = QVBoxLayout(content)
         content_lay.setContentsMargins(20, 2, 20, 12)
         content_lay.setSpacing(12)
         root.addWidget(content, 1)
-        content_lay.addWidget(self.create_header())
+        self.header = self.create_header()
+        content_lay.addWidget(self.header)
 
-        self.pagebar = self._build_pagebar()
-        content_lay.addWidget(self.pagebar)
-        self.tabview = TabView(show_bar=False)
+        self.tabview = TabView()
         content_lay.addWidget(self.tabview, 1)
 
         self.tabview.add(TAB_MAIN, self.setup_tab_main())
@@ -336,26 +336,14 @@ class MH3ULauncherApp(LauncherLogic):
         self.tabview.add(TAB_TOOLS, self.setup_tab_tools())
         # Radmin/Tailscale/ZeroTier may have connected after the launcher opened
         self.tabview.changed.connect(lambda key: key == TAB_ONLINE.strip() and self.refresh_local_ips())
-        self._build_menu()
-        self.tabview.changed.connect(self._on_page_changed)
-        self._on_page_changed(self.tabview.current())
         self.tabview.animate = True  # from here on the pages fade in when they change
 
-        content_lay.addWidget(self.create_footer())
+        self.footer = self.create_footer()
+        content_lay.addWidget(self.footer)
 
     # ---- gear menu, page bar, animations ---------------------------------------------------------
-    def _build_pagebar(self):
-        bar = QWidget()
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(2, 0, 2, 0)
-        lay.setSpacing(12)
-        lay.addWidget(Button("←  Principal", "default", lambda: self.tabview.set(TAB_MAIN), width=128, height=30, size=10))
-        self.lbl_page = Label("", "#eab84c", 13, bold=True)
-        lay.addWidget(self.lbl_page)
-        lay.addStretch(1)
-        return bar
-
     def _build_menu(self):
+        """The gear: the options of the launcher itself, wherever they used to be. (Not the game's options: those stay in their tabs.)"""
         self.menu = qtmenu.SettingsMenu(self.window)
         gear = self.titlebar.btn_menu
 
@@ -364,19 +352,39 @@ class MH3ULauncherApp(LauncherLogic):
             gear.update()
 
         self.menu.on_hidden = closed
-        for tab in (TAB_MAIN, TAB_INSTALL, TAB_SETTINGS, TAB_CONTROLS, TAB_ONLINE, TAB_TOOLS):
-            self.menu.add_page(tab.strip(), tab, lambda t=tab: self.tabview.set(t))
-        self.menu.add_separator()
+        self.menu.add_title("OPCIONES DEL LAUNCHER")
         self.sw_animations = self.menu.add_switch(
             "💡 Animaciones",
             bool(self.config.get("animations", True)),
             self.on_animations_toggled,
             qtanim.tip_html(
-                "Suaviza los cambios de página, los botones y la entrada del launcher. Se desactivan solas si Windows tiene "
+                "Suaviza los cambios de pestaña, los botones y la entrada del launcher. Se desactivan solas si Windows tiene "
                 "las animaciones apagadas."
             ),
         )
-        self.menu.add_action("🔄  Buscar actualizaciones", self.on_update_button)
+        self.chk_acrylic = self.menu.add_switch(
+            "💡 Efecto Acrylic de la ventana",
+            bool(self.config.get("acrylic", False)),
+            self.on_acrylic_toggled,
+            qtanim.tip_html(
+                "El escritorio se transparenta detrás de la ventana. Solo funciona en Windows 11; si usas Windows 10, déjalo "
+                "desactivado. Reinicia el launcher para ver el cambio."
+            ),
+        )
+        self.chk_discord_rpc = self.menu.add_switch(
+            "💡 Estado en Discord",
+            bool(self.config.get("discord_rpc", True)),
+            self.save_settings_from_ui,
+            qtanim.tip_html("Rich Presence: muestra en tu Discord a qué juegas y el nombre de tu cazador."),
+        )
+        self.sw_auto_updates = self.menu.add_switch(
+            "💡 Buscar actualizaciones al abrir",
+            bool(self.config.get("auto_check_updates", True)),
+            self.on_auto_updates_toggled,
+            qtanim.tip_html("Al abrir el launcher comprueba si hay una versión nueva y te avisa. No instala nada sin preguntarte."),
+        )
+        self.menu.add_separator()
+        self.menu.add_action("🔄  Buscar actualizaciones ahora", self.on_update_button)
         gear.clicked.connect(self.open_menu)
 
     def open_menu(self):
@@ -387,13 +395,9 @@ class MH3ULauncherApp(LauncherLogic):
         self.titlebar.btn_menu.update()
         self.menu.popup_below(self.titlebar.btn_menu)
 
-    def _on_page_changed(self, key):
-        self.menu.set_current(key)
-        main = key == TAB_MAIN.strip()
-        self.pagebar.setVisible(not main)
-        for tab in (TAB_INSTALL, TAB_SETTINGS, TAB_CONTROLS, TAB_ONLINE, TAB_TOOLS):
-            if tab.strip() == key:
-                self.lbl_page.setText(tab.strip())
+    def on_auto_updates_toggled(self):
+        self.config["auto_check_updates"] = bool(self.sw_auto_updates.get())
+        self.save_config()
 
     def on_animations_toggled(self):
         on = bool(self.sw_animations.get())
@@ -728,13 +732,6 @@ class MH3ULauncherApp(LauncherLogic):
         g.addWidget(self.opt_ui_language)
         _tip(lbl_lang, "Idioma de los ajustes y del teclado dentro del juego. «Automático» sigue el idioma de Windows.", self.opt_ui_language)
 
-        g.addWidget(Label("Ventana", None, 10.5, bold=True))
-        self.chk_acrylic = CheckBox("Efecto Acrylic (el escritorio se transparenta; reinicia el launcher)", self.on_acrylic_toggled)
-        if self.config.get("acrylic", False):
-            self.chk_acrylic.select()
-        g.addWidget(self.chk_acrylic)
-        _tip(self.chk_acrylic, "Si usas Windows 10, déjalo desactivado: solo funciona en Windows 11.")
-
         g.addWidget(Label("Audio & Efectos", None, 10.5, bold=True))
         self.chk_audio = CheckBox("Sonido Activado (CPAL WASAPI)", self.save_settings_from_ui)
         if self.config.get("audio", True):
@@ -768,12 +765,6 @@ class MH3ULauncherApp(LauncherLogic):
         self.entry_hunter_name_cfg.insert(0, current_hunter)
         self.entry_hunter_name_cfg.on_change(self.save_settings_from_ui)
         r.addWidget(self.entry_hunter_name_cfg)
-
-        r.addWidget(Label("Discord Rich Presence (Estado en Discord):", "#8f9bff", 10.5, bold=True))
-        self.chk_discord_rpc = CheckBox("Mostrar estado en Discord (Rich Presence)", self.save_settings_from_ui)
-        if self.config.get("discord_rpc", True):
-            self.chk_discord_rpc.select()
-        r.addWidget(self.chk_discord_rpc)
 
         r.addWidget(Label("Trucos (cheats)", "#e07a6f", 10.5, bold=True))
         warn = _hint("⚠ Pueden alterar o corromper tu partida guardada. Haz una copia antes (pestaña «Partidas & Logs») y úsalos bajo tu propia decisión.", "#eab84c")
@@ -1093,6 +1084,7 @@ def main():
     app = MH3ULauncherApp(qapp)
     qtanim.fade_window_in(app.window)
     app.show()
+    QTimer.singleShot(0, lambda: qtanim.intro([app.header, app.tabview.bar, app.tabview.stack, app.footer]))
     return qapp.exec()
 
 

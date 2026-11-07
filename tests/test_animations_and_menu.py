@@ -36,17 +36,21 @@ class AnimationSwitchTests(unittest.TestCase):
         self.assertFalse(qtanim.enabled())
         qtanim._windows_allows = True
 
-    def test_a_page_fade_takes_its_effect_off_when_it_ends(self):
+    def test_a_page_reveal_takes_its_effect_off_and_leaves_the_widget_in_place(self):
         import qtanim
 
         qtanim._windows_allows = True
         qtanim.set_user_choice(True)
-        w = QWidget()
-        w.show()
-        qtanim.fade_in(w, 60)
+        host = QWidget()
+        host.resize(300, 200)
+        w = QWidget(host)
+        w.setGeometry(10, 20, 100, 50)
+        host.show()
+        qtanim.reveal(w, 60, 18)
         self.assertIsNotNone(w.graphicsEffect())
-        wait(250)
+        wait(300)
         self.assertIsNone(w.graphicsEffect())  # an effect left on would make every repaint slower
+        self.assertEqual((w.x(), w.y()), (10, 20))
 
     def test_nothing_runs_when_animations_are_off(self):
         import qtanim
@@ -54,7 +58,7 @@ class AnimationSwitchTests(unittest.TestCase):
         qtanim.set_user_choice(False)
         w = QWidget()
         w.show()
-        qtanim.fade_in(w, 60)
+        qtanim.reveal(w, 60, 18)
         self.assertIsNone(w.graphicsEffect())
 
     def test_colour_mix_ends(self):
@@ -125,42 +129,76 @@ class WidgetTests(unittest.TestCase):
         b.glow = 1.0
         self.assertFalse(b.grab().isNull())
 
-    def test_pages_can_be_hidden_from_a_tab_bar_and_the_current_one_is_known(self):
+    def test_tabs_show_their_name_without_the_icon_and_the_pill_follows_the_page(self):
+        import qtshim
         from qtshim import TabView
 
-        tv = TabView(show_bar=False)
+        self.assertEqual(qtshim.plain("  🎮 Principal  "), "Principal")
+        self.assertEqual(qtshim.plain("  🛠️ Configuración Gráfica  "), "Configuración Gráfica")
+        self.assertEqual(qtshim.plain("Sin icono"), "Sin icono")
+        tv = TabView()
         a, b = QWidget(), QWidget()
-        tv.add("  uno  ", a)
-        tv.add("  dos  ", b)
+        tv.add("  🎮 Uno  ", a)
+        tv.add("  ⚙️ Dos  ", b)
+        tv.resize(600, 300)
         tv.show()
-        self.assertFalse(tv.bar.isVisible())
-        self.assertEqual(tv.current(), "uno")
-        tv.set("  dos  ")
-        self.assertEqual(tv.current(), "dos")
+        wait(50)
+        self.assertTrue(tv.bar.isVisible())
+        self.assertEqual(tv._buttons["🎮 Uno"].text(), "Uno")
+        self.assertEqual(tv.current(), "🎮 Uno")
+        first = tv.bar.pill.left()
+        tv.animate = True
+        tv.set("  ⚙️ Dos  ")
+        self.assertEqual(tv.current(), "⚙️ Dos")
+        wait(450)  # the pill has slid to the second tab
+        self.assertGreater(tv.bar.pill.left(), first)
+        self.assertAlmostEqual(tv.bar.pill.left(), tv._buttons["⚙️ Dos"].geometry().left(), delta=1)
 
-    def test_the_menu_marks_the_page_showing_and_tells_when_it_closes(self):
+    def test_the_menu_holds_switches_that_stay_open_and_actions_that_close_it(self):
         import qtmenu
 
         host = QWidget()
         host.show()
         menu = qtmenu.SettingsMenu(host)
         seen = []
-        menu.add_page("uno", "Uno", lambda: seen.append("uno"))
-        menu.add_page("dos", "Dos", lambda: seen.append("dos"))
+        menu.add_title("OPCIONES")
+        sw = menu.add_switch("Animaciones", True, lambda: seen.append("sw"), "tip")
         menu.add_separator()
-        menu.add_switch("Animaciones", True, lambda: seen.append("sw"))
-        menu.set_current("dos")
-        self.assertFalse(menu._pages["uno"].current)
-        self.assertTrue(menu._pages["dos"].current)
+        menu.add_action("Buscar", lambda: seen.append("act"))
         closed = []
         menu.on_hidden = lambda: closed.append(1)
+        self.assertEqual(sw.get(), 1)
+        self.assertEqual(sw.toolTip(), "tip")
         menu.popup_below(host)
         self.assertTrue(menu.isVisible())
-        menu._pages["uno"].click()
-        wait(60)
-        self.assertEqual(seen, ["uno"])
+        sw.click()
+        self.assertTrue(menu.isVisible())  # a switch does not close the menu
+        self.assertEqual(sw.get(), 0)
+        menu.findChildren(qtmenu._Row)[0].click()
+        wait(80)
+        self.assertEqual(seen, ["sw", "act"])
         self.assertFalse(menu.isVisible())
         self.assertTrue(closed)
+
+    def test_a_switch_knob_slides_when_animations_are_on_and_jumps_when_off(self):
+        import qtanim
+        from qtshim import Switch
+
+        host = QWidget()
+        sw = Switch("x")
+        sw.setParent(host)
+        host.show()
+        qtanim._windows_allows = True
+        qtanim.set_user_choice(True)
+        sw.click()
+        wait(40)
+        self.assertTrue(0.0 < sw._knob <= 1.2)  # on its way (it may overshoot a little)
+        wait(400)
+        self.assertAlmostEqual(sw._knob, 1.0, delta=0.02)
+        qtanim.set_user_choice(False)
+        sw.click()
+        self.assertEqual(sw._knob, 0.0)
+        qtanim.set_user_choice(True)
 
     def test_the_title_bar_has_the_gear(self):
         import qttitle
