@@ -259,6 +259,60 @@ class SelectorAndTipTests(unittest.TestCase):
         self.assertNotIn("entry_hunter_name", logic)
         self.assertNotIn("MH3U_SWKBD_TEXT", logic)  # a new hunter types the name in the game's own keyboard
 
+    def test_a_panel_unfolds_and_folds_away_instead_of_jumping(self):
+        import qtanim
+        import qtglass
+        from PySide6.QtWidgets import QVBoxLayout
+
+        qtanim._windows_allows = True
+        qtanim.set_user_choice(True)
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        a = qtglass.GlassPanel("card", 16)
+        b = qtglass.GlassPanel("card", 16)
+        for panel in (a, b):
+            inner = QVBoxLayout(panel)
+            inner.addWidget(QWidget())
+            panel.setMinimumHeight(60)
+            lay.addWidget(panel)
+        b.hide()
+        host.resize(300, 400)
+        host.show()
+        wait(40)
+        a.grid_remove()
+        b.grid()
+        wait(60)
+        self.assertTrue(b.isVisible())
+        self.assertLess(b.maximumHeight(), 16777215)  # still unfolding
+        wait(450)
+        self.assertFalse(a.isVisible())
+        self.assertTrue(b.isVisible())
+        self.assertEqual(b.maximumHeight(), 16777215)  # normal size limits are back
+        self.assertEqual(a.maximumHeight(), 16777215)
+        self.assertIsNone(b.graphicsEffect())
+        qtanim.set_user_choice(False)
+        b.grid_remove()
+        self.assertFalse(b.isVisible())  # with animations off it is immediate
+        qtanim.set_user_choice(True)
+
+    def test_a_resize_in_the_middle_of_a_pill_slide_does_not_cut_it_short(self):
+        import qtanim
+        from PySide6.QtCore import QRectF
+        from qtshim import Segmented
+
+        qtanim._windows_allows = True
+        qtanim.set_user_choice(True)
+        seg = Segmented(["Uno", "Dos"], None)
+        seg.resize(400, 40)
+        seg.set("Uno")
+        seg.show()
+        wait(60)
+        seg._buttons["Dos"].click()
+        wait(60)
+        seg.move_pill(QRectF(300, 4, 90, 32), False)  # what a layout change does while the pill is moving
+        wait(450)
+        self.assertAlmostEqual(seg.pill.left(), 300, delta=1)
+
 
 if __name__ == "__main__":
     unittest.main()

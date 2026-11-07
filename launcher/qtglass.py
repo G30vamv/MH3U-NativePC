@@ -10,6 +10,7 @@ alpha, so the labels and buttons placed on a panel are transparent and need no m
 import os
 
 from PIL import Image, ImageChops, ImageFilter
+import qtanim
 from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QWidget
@@ -182,10 +183,10 @@ class GlassPanel(QFrame):
 
     # frame-like helpers the launcher logic uses on the online panels
     def grid(self, **_kw):
-        self.show()
+        qtanim.expand_in(self)
 
     def grid_remove(self):
-        self.hide()
+        qtanim.collapse_out(self)
 
     def paintEvent(self, _event):
         tint, border, sheen = LEVELS[self.level]

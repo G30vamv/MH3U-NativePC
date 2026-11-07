@@ -93,6 +93,72 @@ def reveal(widget, ms=260, dy=18, delay=0):
         go()
 
 
+_NO_LIMIT = 16777215  # QWIDGETSIZE_MAX
+
+
+def _end_fold(widget):
+    """Stops a fold that is running and puts the widget back to its normal size limits."""
+    old = getattr(widget, "_fold", None)
+    if old is not None:
+        old.stop()
+        widget._fold = None
+    widget.setMaximumHeight(_NO_LIMIT)
+    if widget.graphicsEffect() is not None:
+        widget.setGraphicsEffect(None)
+
+
+def _fold(widget, start_h, end_h, start_o, end_o, ms, after):
+    effect = QGraphicsOpacityEffect(widget)
+    effect.setOpacity(start_o)
+    widget.setGraphicsEffect(effect)
+    group = QParallelAnimationGroup(widget)
+    height = QPropertyAnimation(widget, b"maximumHeight")
+    height.setDuration(ms)
+    height.setStartValue(start_h)
+    height.setEndValue(end_h)
+    height.setEasingCurve(QEasingCurve.Type.OutCubic)
+    fade = QPropertyAnimation(effect, b"opacity")
+    fade.setDuration(ms)
+    fade.setStartValue(start_o)
+    fade.setEndValue(end_o)
+    fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+    group.addAnimation(height)
+    group.addAnimation(fade)
+
+    def done():
+        widget._fold = None
+        widget.setMaximumHeight(_NO_LIMIT)
+        if widget.graphicsEffect() is effect:
+            widget.setGraphicsEffect(None)
+        after()
+
+    group.finished.connect(done)
+    widget._fold = group
+    group.start()
+
+
+def expand_in(widget, ms=260):
+    """Shows a hidden widget by unfolding it (its height grows from nothing while it fades in), so what is below it slides down."""
+    _end_fold(widget)
+    parent = widget.parentWidget()
+    if not enabled() or parent is None or not parent.isVisible():
+        widget.show()
+        return
+    widget.setMaximumHeight(0)
+    widget.show()
+    target = max(widget.sizeHint().height(), widget.minimumSizeHint().height(), 1)
+    _fold(widget, 0, target, 0.0, 1.0, ms, lambda: None)
+
+
+def collapse_out(widget, ms=220):
+    """Hides a widget by folding it away (its height shrinks to nothing while it fades out), so what is below it slides up."""
+    _end_fold(widget)
+    if not enabled() or not widget.isVisible():
+        widget.hide()
+        return
+    _fold(widget, widget.height(), 0, 1.0, 0.0, ms, widget.hide)
+
+
 def fade_in(widget, ms=170):
     """A plain fade (no movement)."""
     reveal(widget, ms, 0)

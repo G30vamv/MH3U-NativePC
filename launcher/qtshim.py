@@ -438,6 +438,9 @@ class PillBar(QFrame):
 
     def move_pill(self, target, animate):
         target = QRectF(target)
+        if not animate and self._slide.state() == QVariantAnimation.State.Running:
+            self._slide.setEndValue(target)  # the layout moved while sliding (a scroll bar came or went): aim at the new place
+            return
         self._slide.stop()
         if animate and qtanim.enabled() and self.pill is not None and self.isVisible():
             self._slide.setStartValue(QRectF(self.pill))
