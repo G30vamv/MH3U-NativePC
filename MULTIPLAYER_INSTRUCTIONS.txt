@@ -1,0 +1,75 @@
+================================================================================
+  ONLINE MULTIPLAYER - MONSTER HUNTER 3 ULTIMATE (PC)
+================================================================================
+
+(La versión en español de este archivo es INSTRUCCIONES_MULTIJUGADOR.txt)
+
+Up to 4 hunters can play. One person is the HOST and the others join them as
+CLIENTS.
+
+--------------------------------------------------------------------------------
+BEFORE YOU START (all players)
+--------------------------------------------------------------------------------
+1. Install Radmin VPN (free, no sign-up) on every PC.
+2. One of you creates a network in Radmin VPN and the others join it with its name and password.
+3. Check that everybody shows as connected (in green) in that network.
+
+--------------------------------------------------------------------------------
+IF YOU ARE THE HOST
+--------------------------------------------------------------------------------
+1. Open the Launcher and go to the "Online Mode" tab.
+2. Turn on the switch "Enable Online Multiplayer Mode".
+   Windows will ask for administrator permission once: accept.
+3. Choose "Create my room (Host)".
+4. In "Your IP for friends" choose the Radmin VPN IP (it starts with 26.)
+   and press "Copy IP". Send it to your friends.
+5. Go to the "Main" tab and press PLAY.
+   (The server starts by itself and what you typed is saved by itself.
+   If Windows could block your friends, the Launcher tells you and
+   fixes it with an administrator permission.)
+6. In the game, talk to the Boatman (Neko) in Moga Village and choose:
+   "Tanzia Port" -> "Network mode". Create your room and wait for your friends.
+
+IMPORTANT: do not close the Launcher while you play.
+
+--------------------------------------------------------------------------------
+IF YOU JOIN A FRIEND (CLIENT)
+--------------------------------------------------------------------------------
+1. Join your friend's Radmin VPN network.
+2. Open the Launcher and go to the "Online Mode" tab.
+3. Turn on the switch "Enable Online Multiplayer Mode" and accept the
+   administrator permission.
+4. Choose "Join a friend's room (Client)".
+5. Paste the IP your friend gave you in "Host / Friend IP".
+6. Press "Test Connection". If it turns green, your friend's server answers.
+7. Your friend (the host) must have the game open BEFORE you press
+   PLAY. Go to the "Main" tab and press PLAY (what you typed is saved by itself).
+8. In the game, talk to the Boatman (Neko) and choose:
+   "Tanzia Port" -> "Network mode". Look for your friend's room and join it.
+
+--------------------------------------------------------------------------------
+IF SOMETHING DOES NOT WORK
+--------------------------------------------------------------------------------
+• "Test Connection" turns red:
+  - Check that both of you are connected to the same Radmin VPN network.
+  - Check that the IP is typed correctly (the host's, it starts with 26.).
+  - Ask the host to open the game first.
+
+• You cannot see each other's room (or you get disconnected when you enter it):
+  - Press "Network Diagnostics" in the Online Mode tab on both PCs: it says
+    what is missing. If the firewall is wrong, press PLAY and accept to repair it.
+  - If a Windows window asks for permission, never press "Cancel": it creates a
+    block that overrides everything else.
+
+• The Launcher did not ask for permission when you turned the switch on:
+  - Turn the Online Mode switch off and on again.
+
+• The audio cuts or the FPS drop when you are the host:
+  - Close other heavy programs. The host runs the game and the server at the
+    same time, so it needs the most powerful PC of the group.
+
+--------------------------------------------------------------------------------
+Special thanks to:
+- glinesbdev (native PC recompilation engine)
+- Matt Wood / Matt-Wood-23 (protocol reverse engineering and online architecture)
+================================================================================
