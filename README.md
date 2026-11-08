@@ -6,6 +6,12 @@
 
 [**Download the latest version**](../../releases/latest) · [What changed in each version](CHANGELOG.md) · [Install](#installation)
 
+<p align="center">
+  <a href="https://t.me/+-8flfKzcfEZjMWYx"><img src="https://img.shields.io/badge/Telegram-Join%20the%20channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Join the Telegram channel"></a>
+</p>
+
+<p align="center"><sub>Questions, news, or a bug to report? Write to us on Telegram.</sub></p>
+
 > **Credit where it is due.** MH3U NativePC is built on the work of two people. The **native port itself, the PC recompilation, the translator and the engine** are by **glinesbdev** ([glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port), AGPL-3.0). The **online server and network logic** are by **Matt-Wood-23** ([Matt-Wood-23/mh3u-revival](https://github.com/Matt-Wood-23/mh3u-revival), AGPL-3.0). This project adds improvements on top of them and is not affiliated with, or endorsed by, either of them.
 
 > **Legal notice.** This repository does not contain or distribute any game file (executables, models, textures, audio). You need your own legitimate copy of *Monster Hunter 3 Ultimate* (Wii U, USA version + update v32) dumped from your console. Fan project, not affiliated with Capcom or Nintendo.
@@ -100,6 +106,10 @@ tools/           make_release.py / publish_release.py: build the zip + manifest.
 tests/           Tests (updater, HidHide, toolchain installer, glass UI)
 docs/            Release guide
 ```
+
+## Contact and bug reports
+
+For more information or to report a bug, join the [Telegram channel](https://t.me/+-8flfKzcfEZjMWYx). You can also open an [issue](../../issues). When you report a problem, attach the launcher's log file (`mh3u_latest.log`) if you can.
 
 ## Credits
 
