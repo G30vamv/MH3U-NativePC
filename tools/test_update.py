@@ -115,7 +115,7 @@ def main():
             for e in todo:
                 with open(os.path.join(inst, '_update', e['rel']), 'rb') as f:
                     got = hashlib.sha256(f.read()).hexdigest()
-                differ += got != hashlib.sha256(zz.read('MH3U_Port_Launcher/' + e['rel'])).hexdigest()
+                differ += got != hashlib.sha256(zz.read('MH3U_Port_Launcher/' + e['rel'].replace(os.sep, '/'))).hexdigest()
         print('files that differ from the published zip:', differ)
         bad += differ
     print('RESULT:', 'OK' if not bad else 'PROBLEMS')
