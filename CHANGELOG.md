@@ -6,18 +6,25 @@ Every entry is also published as the notes of its [GitHub Release](../../release
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-11-08
+
 ### Added
 - **A menu for the launcher's own options.** The gear next to the window buttons opens a menu with the options that belong to the launcher itself: the animations, the Acrylic effect of the window, the Discord status and looking for updates when it opens. The Acrylic and Discord options moved there from the Graphics tab. The tabs stay where they were, now with just their names.
 - **Soft animations you can notice.** The tabs and the selectors (resolution, graphics engine, VSync...) have a gold pill that slides to the choice you click and lights up under the mouse, pages rise into place when you change them, panels fold away and unfold when something changes (for example when you switch between joining a friend's room and creating your own in the Online tab), buttons glow softly under the mouse, switches slide, the launcher comes in piece by piece when it opens and the PLAY button gently glows in gold while the game is not running. They cost nothing when you are not clicking, they turn off by themselves if Windows has animations off, and there is a switch for them in the menu.
+- **The launcher fades and sinks a little when you minimise it**, and comes back softly (it follows the same animations switch in the menu).
 - **A logo for MH3U NativePC.** A new emblem (a great sword planted in a rock, with the moon and a volcano behind it) is now the icon of `MH3U.exe` and of its window.
-- **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, invincible (the hits you take do 0 damage and add no status effects), more zenny and infinite items used in a quest. Two read-only helpers join them: **life bars for the monsters** of the quest and a **damage meter** (what the monsters' life goes down by, yours apart, and your DPS), both drawn over the game. A warning tells you that cheats can alter or corrupt your save before you turn them on.
+- **A Mods section** for what only reads the game and draws over it: the **monsters' life** (a big bar and name for the main monsters, a thin bar for the small ones) and the **damage meter with DPS**. Each one is switched on by itself, they sit in the top-right corner (no longer tied to the FPS counter), you can drag each with the mouse while F1 is open and put them back from F2, and they use the launcher's colours, like the FPS counter.
+- **Cheats section** in the launcher (Settings tab, off by default): One Hit Kill (your hits do xN damage), infinite sharpness, more zenny and infinite items used in a quest (potions, traps, whetstones and the ammo of bowguns). One Hit Kill never makes a hit above 10 000 base damage, so shots from bowguns and bows hurt too. A warning tells you that cheats can alter or corrupt your save before you turn them on.
 - The first time you play after updating, the game is built again (the cheats need new hooks).
 
 ### Fixed
+- **Long sessions stay light.** The game used to pile up about 30 idle background threads every minute (thousands after an hour or two, most of them in online rooms); they now end when they are done, so the game keeps a steady number of threads and a little less memory.
+- **Much smaller game log.** `mh3u_latest.log` used to grow to several MB in a long session (three quarters of it was one repeated graphics line); it now stays about ten times smaller, so it is easier to send when you report a problem.
 - **Rebuilding after an update now really starts over when it has to.** If an update changed the game's code (like the cheats do), the launcher used to build the old code again and leave the new parts out, so some new features did nothing. It now makes the code again whenever the build is out of date.
 - **Cheats that cannot work now tell you.** If a cheat needs a part your compiled game does not have, the launcher says so when you press PLAY and offers to build the game again; the game also says it in its log. The build window warns when the launcher has no hooks list.
 
 ### Removed
+- **The blacksmith wishlist, the forge line in the item menu and the Mods page of the pause menu.** They are gone, and so are the settings that turned them on. F1 still opens the settings and controls (and now lets you drag the life and damage panels), and F2 the quick settings.
 - **The two boxes for the hunter's name.** Type the name of a new hunter in the game itself, with its own keyboard; with a saved game the launcher keeps using that hunter's name for Discord and the online rooms, as before.
 
 ### Changed

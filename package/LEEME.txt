@@ -1,5 +1,5 @@
 ﻿============================================================
-  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.12)
+  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.13)
   Launcher desarrollado por: g30wolff99
 ============================================================
 
@@ -11,7 +11,7 @@ Este paquete es 100% PORTABLE y AUTÓNOMO (funciona directamente al descomprimir
 - Interfaz de cristal con resumen en vivo de tus ajustes; efecto Acrylic opcional (solo Windows 11).
 - Soporte para optimización inter-archivos ThinLTO (-flto=thin + -O3).
 - Motor nativo 'mh3u-tools.exe' optimizado con contador de FPS e interfaz fluida.
-- Launcher gráfico oficial v0.9.12 con registro en tiempo real escroleable.
+- Launcher gráfico oficial v0.9.13 con registro en tiempo real escroleable.
 
 ------------------------------------------------------------
 PASOS RÁPIDOS PARA JUGAR (SOLO LA PRIMERA VEZ):
@@ -38,6 +38,13 @@ PASOS RÁPIDOS PARA JUGAR (SOLO LA PRIMERA VEZ):
    - Dentro del juego, F2 abre unos ajustes rápidos (resolución, reescalado, nitidez, VSync,
      contador de FPS, sensibilidad de cámara e idioma); F1 abre el panel completo. El botón B del mando los cierra.
 5. ¡Listo! Pulsa en "🎮 JUGAR".
+
+MODS Y TRUCOS (pestaña de ajustes):
+- «Mods»: vida de los monstruos y contador de daño en pantalla. Solo leen el juego, no cambian nada: son seguros
+  y recomendados también en partidas online. Con F1 abierto se pueden arrastrar con el ratón.
+- «Trucos» (desactivados por defecto): One Hit Kill, filo infinito, más zenny y objetos infinitos (incluida la
+  munición de las ballestas). Cambian el juego y pueden alterar o corromper tu partida guardada: haz copia antes.
+  En partidas online NO se aconsejan (no están bloqueados, pero pueden afectar a tu partida y a la de los demás).
 
 ------------------------------------------------------------
 CONSEJO IMPORTANTE:

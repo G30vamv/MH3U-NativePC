@@ -35,7 +35,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.12"
+APP_VERSION = "v0.9.13"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -44,7 +44,7 @@ UPDATE_BTN_READY = ("#b8791e", "#d4922a")
 
 # Bump when the translator output changes (e.g. more functions discovered). A game.dll built
 # by an older translator lacks functions the online code needs ("not a translated function").
-TRANSLATOR_REV = "6"  # 6: hunter_hit moves to the hunter's hit resolver (it was the companions'); 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
+TRANSLATOR_REV = "7"  # 7: hunter_hit leaves the hooks list (invincible is retired); 6: hunter_hit moves to the hunter's hit resolver (it was the companions'); 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
 
 # The launcher's Cheats section. The engine reads the ones that are on from MH3U_CHEATS (mh3u-rt/src/cheats.rs). To add a cheat: a row
 # here, its callback in cheats.rs and its hook in package/mods/hooks.txt. "value" is for a cheat with a multiplier.
@@ -52,27 +52,49 @@ CHEATS = [
     {
         "id": "onehit",
         "label": "One Hit Kill (tus golpes hacen ×N de daño)",
-        "hint": "💡 Con ×1000 casi todo cae de un golpe. Solo cuenta tu daño, no el de otros jugadores.",
+        "hint": "💡 Con ×1000 casi todo cae de un golpe (el daño base de cada golpe se limita a 10 000, también con ballestas y arcos). Solo cuenta tu daño, no el de otros jugadores.",
         "value": {"default": 1000, "min": 2, "max": 100000},
     },
     {"id": "sharp", "label": "Filo infinito", "hint": "💡 El filo del arma no baja nunca."},
-    {"id": "god", "label": "Invencible (los golpes que recibes hacen 0 de daño)", "hint": "💡 Los golpes no quitan vida ni acumulan estados (veneno, aturdimiento...); pueden seguir empujándote. Solo vale para tu cazador."},
     {
         "id": "money",
         "label": "Más zenny (todo lo que ganes ×N)",
         "hint": "💡 Se multiplican las ganancias (recompensas, ventas); los gastos no cambian.",
         "value": {"default": 10, "min": 2, "max": 1000},
     },
-    {"id": "items", "label": "Objetos infinitos (los que usas en misión no se gastan)", "hint": "💡 Pociones, trampas, piedras de afilar... usados dentro de una misión."},
-    {"id": "monsterhp", "label": "Vida de los monstruos en pantalla (solo lectura)", "hint": "💡 Una barra por monstruo de la misión con su vida actual y máxima. No cambia nada del juego."},
-    {"id": "dmgmeter", "label": "Contador de daño y DPS (solo lectura)", "hint": "💡 Suma lo que baja la vida de los monstruos (aparte, lo de tus golpes) y el DPS de los últimos 5 s y medio. No cambia nada del juego."},
+    {"id": "items", "label": "Objetos infinitos (los que usas en misión no se gastan)", "hint": "💡 Pociones, trampas, piedras de afilar, munición de ballestas... usados dentro de una misión."},
 ]
+
+# The launcher's Mods section: what is only read from the game and drawn over it (it changes nothing in the game, so it needs no warning
+# and no master switch). Each is on its own and the engine reads them from the same MH3U_CHEATS list (mh3u-rt/src/cheats.rs).
+MODS = [
+    {
+        "id": "monsterhp",
+        "label": "Vida de los monstruos en pantalla",
+        "hint": "💡 Una barra por monstruo de la misión con su nombre y su vida; grande para los principales y pequeña para los pequeños. Se mueve con el ratón con F1 abierto (arrastrando) y por defecto va arriba a la derecha. No cambia nada del juego: recomendado también online.",
+    },
+    {
+        "id": "dmgmeter",
+        "label": "Contador de daño y DPS",
+        "hint": "💡 Suma lo que baja la vida de los monstruos (aparte, lo de tus golpes) y el DPS de los últimos 5 s y medio. Es independiente de las barras de vida y también se mueve con el ratón con F1 abierto. No cambia nada del juego: recomendado también online.",
+    },
+]
+
+
+def mod_enabled(config, mod_id):
+    """Whether a mod of the Mods section is on (an older configuration kept them as cheats: `cheat_<id>`)."""
+    if f"mod_{mod_id}" in config:
+        return bool(config[f"mod_{mod_id}"])
+    return bool(config.get(f"cheat_{mod_id}", False))
 
 CHEATS_WARNING = (
     "Los trucos cambian lo que pasa dentro del juego y pueden alterar, o incluso corromper, tu partida guardada "
     "(objetos, dinero, progreso).\n\n"
     "Haz una copia antes con «Respaldar Partidas Ahora» (pestaña «Partidas & Logs») y úsalos bajo tu propia decisión: "
-    "nadie puede deshacer por ti lo que un truco haya escrito en tu partida.\n\n¿Activar los trucos?"
+    "nadie puede deshacer por ti lo que un truco haya escrito en tu partida.\n\n"
+    "En partidas ONLINE no se aconsejan: no están bloqueados, pero pueden afectar a tu partida y a la de los demás "
+    "jugadores de la sala (y desincronizarla). Los mods de solo lectura (vida de los monstruos, contador de daño) sí son "
+    "seguros también online.\n\n¿Activar los trucos?"
 )
 
 
@@ -86,11 +108,10 @@ def cheat_value(config, cheat):
     return max(spec["min"], min(spec["max"], v))
 
 
-# The hooks (names in mods/hooks.txt) each cheat needs in the build; cheats.rs has the same table.
+# The hooks (names in mods/hooks.txt) each cheat and mod needs in the build; cheats.rs has the same table.
 CHEAT_HOOKS = {
     "onehit": ("hit_resolve",),
     "sharp": ("sharp_change",),
-    "god": ("hunter_hit",),
     "money": ("money_add",),
     "items": ("item_to_pouch",),
     "monsterhp": ("monster_init",),
@@ -115,6 +136,7 @@ def build_hook_names(out_dir):
 def missing_cheat_hooks(config, out_dir):
     """The hooks the cheats that are on need and the build lacks (sorted); empty when the cheats are off or nothing is missing."""
     on = {c["id"] for c in CHEATS if config.get("cheats_enabled", False) and config.get(f"cheat_{c['id']}", False)}
+    on |= {m["id"] for m in MODS if mod_enabled(config, m["id"])}
     needed = {h for cheat in on for h in CHEAT_HOOKS.get(cheat, ())}
     return sorted(needed - build_hook_names(out_dir))
 
@@ -129,13 +151,14 @@ def mark_build_stale(out_dir):
 
 
 def build_cheats_env(config):
-    """The value of MH3U_CHEATS ("onehit=1000,sharp"): the cheats that are on, if the section is on; "" when none."""
-    if not config.get("cheats_enabled", False):
-        return ""
+    """The value of MH3U_CHEATS ("onehit=1000,sharp,monsterhp"): the cheats that are on, if their section is on, then the mods that are
+    on (they need no master switch); "" when none."""
     parts = []
-    for c in CHEATS:
-        if config.get(f"cheat_{c['id']}", False):
-            parts.append(f"{c['id']}={cheat_value(config, c)}" if c.get("value") else c["id"])
+    if config.get("cheats_enabled", False):
+        for c in CHEATS:
+            if config.get(f"cheat_{c['id']}", False):
+                parts.append(f"{c['id']}={cheat_value(config, c)}" if c.get("value") else c["id"])
+    parts += [m["id"] for m in MODS if mod_enabled(config, m["id"])]
     return ",".join(parts)
 
 # Where the game keeps what the player changed in its F1 overlay (Settings window). The launcher takes it into its own
@@ -584,8 +607,6 @@ class LauncherLogic:
             "fullscreen": True,
             "pad_layout": "xbox",
             "overlay": True,
-            "native_menu": True,
-            "native_text": True,
             "keyboard_controls": True,
             "fps": False,
             "audio": True,
@@ -616,11 +637,17 @@ class LauncherLogic:
             defaults[f"cheat_{c['id']}"] = False
             if c.get("value"):
                 defaults[f"cheat_{c['id']}_value"] = c["value"]["default"]
+        for m in MODS:
+            defaults[f"mod_{m['id']}"] = False
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     saved = json.load(f)
                     defaults.update(saved)
+                    for m in MODS:
+                        # they used to be cheats: keep what the player had chosen
+                        if f"mod_{m['id']}" not in saved and saved.get(f"cheat_{m['id']}"):
+                            defaults[f"mod_{m['id']}"] = True
             except Exception as e:
                 print(f"Error loading config: {e}")
 
@@ -907,18 +934,20 @@ class LauncherLogic:
         self.config["audio"] = bool(self.chk_audio.get())
         self.config["audio_fx"] = bool(self.chk_audio_fx.get())
         self.config["overlay"] = bool(self.chk_overlay.get())
-        self.config["native_menu"] = bool(self.chk_native_menu.get())
-        self.config["native_text"] = bool(self.chk_native_text.get())
         if hasattr(self, "chk_lto"):
             self.config["build_lto"] = bool(self.chk_lto.get())
         if hasattr(self, "chk_discord_rpc"):
             self.config["discord_rpc"] = bool(self.chk_discord_rpc.get())
         self.save_config()
 
-        mods_text = "F1 Wishlist" if self.config["overlay"] else "Sin overlay"
-        if self.config["native_menu"]:
-            mods_text += " + Menú Nativo"
-        self.lbl_quick_mods.configure(text=f"Mods: {mods_text}")
+        on = [m["label"].split(" en pantalla")[0] for m in MODS if mod_enabled(self.config, m["id"])]
+        self.lbl_quick_mods.configure(text=f"Mods: {', '.join(on) if on else 'ninguno'}")
+
+    def save_mods_from_ui(self):
+        """The Mods section's check boxes go into the configuration."""
+        for m in MODS:
+            self.config[f"mod_{m['id']}"] = bool(self.chk_mod[m["id"]].get())
+        self.save_config()
 
     def save_cheats_from_ui(self):
         """The Cheats section's check boxes and multipliers go into the configuration."""
@@ -1997,16 +2026,12 @@ class LauncherLogic:
             env["MH3U_PAD_LAYOUT"] = self.config["pad_layout"]
         if self.config.get("scale"):
             env["MH3U_GFX_RESOLUTION_SCALE"] = str(self.config["scale"])
-        if self.config.get("native_menu"):
-            env["MH3U_NATIVE_MENU"] = "1"
-        if self.config.get("native_text"):
-            env["MH3U_NATIVE_TEXT"] = "1"
         if self.config.get("keyboard_controls", True):
             env["MH3U_KEYBOARD_CONTROLS"] = "1"
         if self.config.get("fps"):
             env["MH3U_FPS"] = "1"
-        # Only turn off overlay if BOTH overlay and fps are false, as FPS counter is drawn in overlay
-        if not self.config.get("overlay", True) and not self.config.get("fps", False):
+        # Only turn off overlay if the overlay, the FPS counter and the mods are all off, as the counter and the mods' panels are drawn in it
+        if not self.config.get("overlay", True) and not self.config.get("fps", False) and not any(mod_enabled(self.config, m["id"]) for m in MODS):
             env["MH3U_OVERLAY"] = "off"
         if not self.config.get("audio", True):
             env["MH3U_AUDIO"] = "off"

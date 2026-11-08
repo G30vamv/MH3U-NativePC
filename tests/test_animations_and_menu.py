@@ -314,5 +314,43 @@ class SelectorAndTipTests(unittest.TestCase):
         self.assertAlmostEqual(seg.pill.left(), 300, delta=1)
 
 
+class MinimizeTests(unittest.TestCase):
+    def tearDown(self):
+        import qtanim
+
+        qtanim.set_user_choice(True)
+
+    def test_the_window_sinks_and_fades_before_it_minimises_and_comes_back_whole(self):
+        import qtanim
+
+        qtanim._windows_allows = True
+        qtanim.set_user_choice(True)
+        win = QWidget()
+        win.resize(300, 200)
+        win.move(50, 50)
+        win.show()
+        wait(30)
+        qtanim.minimize_window(win)
+        self.assertIsNotNone(win._minimizing, "it goes down softly, not at once")
+        qtanim.minimize_window(win)  # a second click while it goes down does nothing more
+        wait(400)
+        self.assertTrue(win.isMinimized())
+        self.assertEqual(win.windowOpacity(), 1.0, "opaque again, so that restoring it finds it whole")
+        self.assertEqual((win.pos().x(), win.pos().y()), (50, 50), "and back in its place")
+        self.assertIsNone(win._minimizing)
+
+    def test_it_minimises_at_once_when_animations_are_off(self):
+        import qtanim
+
+        qtanim.set_user_choice(False)
+        win = QWidget()
+        win.show()
+        wait(30)
+        qtanim.minimize_window(win)
+        wait(30)
+        self.assertTrue(win.isMinimized())
+        self.assertIsNone(getattr(win, "_minimizing", None))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,10 +12,10 @@ index f25c1de..6010faf 100644
  mod report;
 diff --git a/crates/mh3u-gfx/src/monster_names.rs b/crates/mh3u-gfx/src/monster_names.rs
 new file mode 100644
-index 0000000..ecf00d6
+index 0000000..3e3c0a9
 --- /dev/null
 +++ b/crates/mh3u-gfx/src/monster_names.rs
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,133 @@
 +//! The game's names for its monsters, by the id the game gives each kind (`em_id`: the number in `emNNN.arc`, which is also the
 +//! index in the game's own `Monster` text table), in English and in Spanish. An empty name is an id the game gives no name.
 +
@@ -116,9 +116,24 @@ index 0000000..ecf00d6
 +    }
 +}
 +
++/// Whether the kind is a small monster (a Jaggi, a Felyne, a Kelbi, a rock...): the others are the large monsters of a quest.
++pub fn is_small(id: u8) -> bool {
++    matches!(id, 10 | 11 | 13 | 17 | 21..=23 | 26..=40 | 48..=50 | 76..=84)
++}
++
 +#[cfg(test)]
 +mod tests {
-+    use super::name;
++    use super::{is_small, name};
++
++    #[test]
++    fn small_and_large_monsters_are_told_apart() {
++        assert!(is_small(10), "Jaggi");
++        assert!(is_small(30), "Felyne");
++        assert!(is_small(40), "rock");
++        assert!(!is_small(12), "Great Jaggi");
++        assert!(!is_small(2), "Rathalos");
++        assert!(!is_small(74), "Brachydios");
++    }
 +
 +    #[test]
 +    fn known_ids_have_their_names_in_both_languages() {
@@ -135,10 +150,94 @@ index 0000000..ecf00d6
 +    }
 +}
 diff --git a/crates/mh3u-gfx/src/overlay.rs b/crates/mh3u-gfx/src/overlay.rs
-index 8317b0f..fecdf27 100644
+index 8317b0f..da9b22a 100644
 --- a/crates/mh3u-gfx/src/overlay.rs
 +++ b/crates/mh3u-gfx/src/overlay.rs
-@@ -317,7 +317,7 @@ impl Overlay {
+@@ -14,7 +14,7 @@ use mh3u_mods::live;
+ use mh3u_mods::wishlist::{self, Craftable, Piece, Wishlist};
+ use mh3u_rt::input::{OVERLAY_ENABLED, OVERLAY_OPEN, OVERLAY_PRESSES, OVERLAY_SETTINGS_ONLY, OVERLAY_TOGGLE, button};
+ use mh3u_rt::mods::{self, Searching};
+-use std::path::PathBuf;
++use std::path::{Path, PathBuf};
+ use std::sync::atomic::Ordering::Relaxed;
+ use std::sync::{Arc, LazyLock, Mutex};
+ use std::time::{Duration, Instant};
+@@ -127,6 +127,55 @@ enum Save {
+ /// The waits between searches that find nothing: longer each time, up to a minute.
+ const BACKOFF: [u64; 5] = [5, 10, 20, 40, 60];
+ 
++/// The look of the on-screen panels (FPS, monsters' life, damage): the overlay's palette, not a black box.
++fn hud_frame(ui: &egui::Ui) -> egui::Frame {
++    egui::Frame::popup(ui.style())
++        .fill(egui::Color32::from_rgba_unmultiplied(0x10, 0x20, 0x2a, 215))
++        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0x2b, 0x4a, 0x58)))
++}
++
++/// The launcher's blue, for the numbers the panels show.
++const HUD_BLUE: egui::Color32 = egui::Color32::from_rgb(0x4f, 0xc3, 0xd6);
++
++/// Where the player dragged the monsters' life panel and the damage panel to: the top-right corner of each, as a fraction of the screen
++/// (so it keeps its place when the window changes size). `None` is the default place, the top-right corner of the screen.
++#[derive(Clone, Copy, Default, Debug, PartialEq)]
++struct HudLayout {
++    life: Option<(f32, f32)>,
++    meter: Option<(f32, f32)>,
++}
++
++impl HudLayout {
++    fn parse(text: &str) -> HudLayout {
++        let mut layout = HudLayout::default();
++        for line in text.lines() {
++            let Some((key, value)) = line.split_once('=') else { continue };
++            let mut numbers = value.split(',').map(|n| n.trim().parse::<f32>().ok().filter(|n| n.is_finite()));
++            let (Some(Some(x)), Some(Some(y))) = (numbers.next(), numbers.next()) else { continue };
++            let place = Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)));
++            match key.trim() {
++                "life" => layout.life = place,
++                "meter" => layout.meter = place,
++                _ => {}
++            }
++        }
++        layout
++    }
++
++    fn to_text(self) -> String {
++        let line = |key: &str, v: Option<(f32, f32)>| v.map(|(x, y)| format!("{key}={x:.4},{y:.4}\n")).unwrap_or_default();
++        line("life", self.life) + &line("meter", self.meter)
++    }
++
++    fn load(path: &Path) -> HudLayout {
++        std::fs::read_to_string(path).map(|t| HudLayout::parse(&t)).unwrap_or_default()
++    }
++
++    fn save(self, path: &Path) {
++        let _ = if self == HudLayout::default() { std::fs::remove_file(path) } else { std::fs::write(path, self.to_text()) };
++    }
++}
++
+ pub struct Overlay {
+     renderer: Option<egui_wgpu::Renderer>,
+     open: bool,
+@@ -160,6 +209,9 @@ pub struct Overlay {
+     /// The software keyboard's text being typed, and whether the overlay was opened for it (closed again when it is done).
+     kb_text: String,
+     kb_opened: bool,
++    /// Where the life and damage panels were dragged to, and how far down the life panel reaches (the damage panel goes under it by default).
++    hud_layout: HudLayout,
++    life_bottom: f32,
+     /// On-screen FPS counter.
+     fps_enabled: bool,
+     fps_last_time: Instant,
+@@ -241,6 +293,8 @@ impl Overlay {
+             f10: 0,
+             kb_text: String::new(),
+             kb_opened: false,
++            hud_layout: HudLayout::load(&settings_file.with_file_name("hud_layout.txt")),
++            life_bottom: 16.0,
+             fps_enabled: std::env::var_os("MH3U_FPS").is_some(),
+             fps_last_time: Instant::now(),
+             fps_frame_count: 0,
+@@ -317,7 +371,7 @@ impl Overlay {
              self.follow_save();
          }
          self.notices.retain(|(_, t)| t.elapsed() < NOTICE);
@@ -147,90 +246,126 @@ index 8317b0f..fecdf27 100644
              // nothing to draw: the window's size and scale are kept, its events are not wanted
              let pending = INPUT.lock().unwrap_or_else(|e| e.into_inner()).take();
              next_input(pending, &mut self.last_input);
-@@ -679,6 +679,82 @@ impl Overlay {
+@@ -679,6 +733,101 @@ impl Overlay {
          }
      }
  
-+    /// The monsters' life and the damage meter (read-only, `mh3u_rt::combat`), under the FPS counter, while a hunter plays.
-+    fn combat_hud(&self, ctx: &egui::Context) {
++    /// The monsters' life and the damage meter (read-only, `mh3u_rt::combat`), two panels of their own: each is on only if its cheat or mod
++    /// is, and each can be dragged with the mouse while the overlay is open (F1). By default they sit in the top-right corner.
++    fn combat_hud(&mut self, ctx: &egui::Context) {
 +        if !mh3u_rt::combat::enabled() || !in_game() {
 +            return;
 +        }
-+        let l = self.live.lang;
 +        let hud = mh3u_rt::combat::snapshot();
-+        if hud.monsters.is_empty() && hud.dealt == 0 {
-+            return;
-+        }
-+        let top = if self.fps_enabled { 52.0 } else { 16.0 };
-+        egui::Area::new(egui::Id::new("combat_hud"))
-+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(16.0, top))
-+            .order(egui::Order::Foreground)
-+            .interactable(false)
-+            .show(ctx, |ui| {
++        let screen = ctx.content_rect();
++        let layout_file = self.settings_file.with_file_name("hud_layout.txt");
++        let at = |(x, y): (f32, f32)| egui::pos2(screen.left() + x * screen.width(), screen.top() + y * screen.height());
++        let fraction = |p: egui::Pos2| {
++            (((p.x - screen.left()) / screen.width().max(1.0)).clamp(0.0, 1.0), ((p.y - screen.top()) / screen.height().max(1.0)).clamp(0.0, 1.0))
++        };
++        let editing = self.open;
++        // the panel's place: while the overlay is open it can be dragged; otherwise it stays where it was left (or in the corner)
++        let place = |id: &'static str, saved: Option<(f32, f32)>, default: egui::Pos2| {
++            let area = egui::Area::new(egui::Id::new(id)).order(egui::Order::Foreground).pivot(egui::Align2::RIGHT_TOP);
++            match (editing, saved) {
++                (true, saved) => area.default_pos(saved.map_or(default, at)).movable(true).interactable(true),
++                (false, Some(saved)) => area.current_pos(at(saved)).interactable(false),
++                (false, None) => area.current_pos(default).interactable(false),
++            }
++        };
++        let corner = egui::pos2(screen.right() - 16.0, screen.top() + 16.0);
++        let mut life_bottom = screen.top() + 16.0;
++        if hud.life_on && !hud.monsters.is_empty() {
++            let l = self.live.lang;
++            let mut monsters: Vec<_> = hud.monsters.iter().collect();
++            // the large monsters first, then the small ones
++            monsters.sort_by_key(|m| crate::monster_names::is_small(m.id));
++            let out = place("life_hud", self.hud_layout.life, corner).show(ctx, |ui| {
 +                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-+                egui::Frame::popup(ui.style())
-+                    .fill(egui::Color32::from_black_alpha(190))
-+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3e, 0x44, 0x51)))
-+                    .show(ui, |ui| {
-+                        if hud.life_on {
-+                            for m in &hud.monsters {
-+                                let fraction = (m.hp as f32 / m.max.max(1) as f32).clamp(0.0, 1.0);
-+                                let colour = if fraction > 0.5 {
-+                                    egui::Color32::from_rgb(0x98, 0xc3, 0x79)
-+                                } else if fraction > 0.25 {
-+                                    egui::Color32::from_rgb(0xe5, 0xc0, 0x7b)
-+                                } else {
-+                                    egui::Color32::from_rgb(0xe0, 0x6c, 0x75)
-+                                };
-+                                ui.label(
-+                                    egui::RichText::new(format!(
-+                                        "{}   {} / {}  ({:.0} %)",
-+                                        crate::monster_names::name(m.id, l == crate::settings::Lang::Es),
-+                                        m.hp,
-+                                        m.max,
-+                                        fraction * 100.0
-+                                    ))
-+                                    .monospace()
-+                                    .size(13.0),
-+                                );
-+                                ui.add(egui::ProgressBar::new(fraction).desired_width(230.0).desired_height(8.0).fill(colour));
-+                            }
-+                        }
-+                        if hud.meter_on {
-+                            if hud.life_on && !hud.monsters.is_empty() {
-+                                ui.separator();
-+                            }
++                hud_frame(ui).show(ui, |ui| {
++                    for m in monsters {
++                        let fraction = (m.hp as f32 / m.max.max(1) as f32).clamp(0.0, 1.0);
++                        let colour = if fraction > 0.5 {
++                            egui::Color32::from_rgb(0x6b, 0xd0, 0x8a)
++                        } else if fraction > 0.25 {
++                            egui::Color32::from_rgb(0xe5, 0xc0, 0x7b)
++                        } else {
++                            egui::Color32::from_rgb(0xe0, 0x6c, 0x75)
++                        };
++                        let name = crate::monster_names::name(m.id, l == crate::settings::Lang::Es);
++                        if crate::monster_names::is_small(m.id) {
++                            ui.label(egui::RichText::new(format!("{name}  {:.0} %", fraction * 100.0)).size(11.0));
++                            ui.add(egui::ProgressBar::new(fraction).desired_width(130.0).desired_height(4.0).fill(colour));
++                        } else {
 +                            ui.label(
-+                                egui::RichText::new(format!(
-+                                    "{}: {}   ({} {})",
-+                                    l.p("Damage", "Daño"),
-+                                    hud.dealt,
-+                                    l.p("yours", "tuyo"),
-+                                    hud.dealt_own
-+                                ))
-+                                .monospace()
-+                                .size(13.0),
++                                egui::RichText::new(format!("{name}   {} / {}  ({:.0} %)", m.hp, m.max, fraction * 100.0))
++                                    .size(16.0)
++                                    .strong(),
 +                            );
-+                            ui.label(
-+                                egui::RichText::new(format!(
-+                                    "DPS: {:.0}  (5 s)   {} {:.0}",
-+                                    hud.dps,
-+                                    l.p("mean", "media"),
-+                                    hud.dps_mean
-+                                ))
-+                                .monospace()
-+                                .size(13.0)
-+                                .color(egui::Color32::from_rgb(0x56, 0xb6, 0xc2)),
-+                            );
++                            ui.add(egui::ProgressBar::new(fraction).desired_width(290.0).desired_height(13.0).fill(colour));
 +                        }
-+                    });
++                        ui.add_space(3.0);
++                    }
++                });
 +            });
++            life_bottom = out.response.rect.bottom();
++            if out.response.drag_stopped() {
++                self.hud_layout.life = Some(fraction(out.response.rect.right_top()));
++                self.hud_layout.save(&layout_file);
++            }
++        }
++        self.life_bottom = life_bottom;
++        if hud.meter_on && hud.dealt > 0 {
++            let l = self.live.lang;
++            let under = egui::pos2(corner.x, if hud.life_on && !hud.monsters.is_empty() { life_bottom + 8.0 } else { corner.y });
++            let out = place("damage_hud", self.hud_layout.meter, under).show(ctx, |ui| {
++                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
++                hud_frame(ui).show(ui, |ui| {
++                    ui.label(
++                        egui::RichText::new(format!(
++                            "{}: {}   ({} {})",
++                            l.p("Damage", "Daño"),
++                            hud.dealt,
++                            l.p("yours", "tuyo"),
++                            hud.dealt_own
++                        ))
++                        .size(13.0),
++                    );
++                    ui.label(
++                        egui::RichText::new(format!("DPS: {:.0}  (5 s)   {} {:.0}", hud.dps, l.p("mean", "media"), hud.dps_mean))
++                            .size(13.0)
++                            .color(HUD_BLUE),
++                    );
++                });
++            });
++            if out.response.drag_stopped() {
++                self.hud_layout.meter = Some(fraction(out.response.rect.right_top()));
++                self.hud_layout.save(&layout_file);
++            }
++        }
 +    }
 +
      fn ui(&mut self, ctx: &egui::Context) {
          let l = self.live.lang;
          if self.fps_enabled {
-@@ -710,6 +786,7 @@ impl Overlay {
+@@ -694,14 +843,12 @@ impl Overlay {
+                 .interactable(false)
+                 .show(ctx, |ui| {
+                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+-                    egui::Frame::popup(ui.style())
+-                        .fill(egui::Color32::from_black_alpha(190))
+-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3e, 0x44, 0x51)))
++                    hud_frame(ui)
+                         .show(ui, |ui| {
+                             ui.horizontal(|ui| {
+                                 ui.label(
+                                     egui::RichText::new(format!("{:.0} FPS{}", self.fps_current, upscaler_tag))
+-                                        .color(egui::Color32::from_rgb(0x98, 0xc3, 0x79))
++                                        .color(HUD_BLUE)
+                                         .size(14.0)
+                                         .monospace()
+                                         .strong(),
+@@ -710,6 +857,7 @@ impl Overlay {
                          });
                  });
          }
@@ -238,13 +373,70 @@ index 8317b0f..fecdf27 100644
          for (k, (text, _)) in self.notices.iter().enumerate() {
              egui::Area::new(egui::Id::new(("notice", k)))
                  .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0 + 40.0 * k as f32))
+@@ -1050,6 +1198,7 @@ impl Overlay {
+         let l = self.live.lang;
+         let mut live = self.live;
+         let mut language = false;
++        let mut reset_hud = false;
+         egui::Window::new(l.p("Settings", "Ajustes"))
+             .id(egui::Id::new("settings_window"))
+             .default_pos([560.0, 60.0])
+@@ -1112,6 +1261,14 @@ impl Overlay {
+                     ui.checkbox(&mut live.fps_counter, "");
+                     ui.end_row();
+ 
++                    if mh3u_rt::combat::enabled() {
++                        ui.label(l.p("Monster life and damage panels", "Paneles de vida y daño"));
++                        if ui.button(l.p("Back to the corner", "Volver a la esquina")).clicked() {
++                            reset_hud = true;
++                        }
++                        ui.end_row();
++                    }
++
+                     ui.label(l.p("Camera sensitivity (right stick)", "Sensibilidad de cámara (stick derecho)"));
+                     let stick = ui.add(egui::Slider::new(&mut self.stick_pct, 25..=150).suffix(" %"));
+                     if stick.changed() {
+@@ -1144,6 +1301,12 @@ impl Overlay {
+                     .weak(),
+                 );
+             });
++        if reset_hud {
++            // the life and damage panels go back to the corner (egui forgets where it put every window, the others come back to theirs)
++            self.hud_layout = HudLayout::default();
++            self.hud_layout.save(&self.settings_file.with_file_name("hud_layout.txt"));
++            ctx.memory_mut(|m| m.reset_areas());
++        }
+         if live != self.live {
+             let gfx = (live.upscaler, live.sharpness, live.present, live.scale)
+                 != (self.live.upscaler, self.live.sharpness, self.live.present, self.live.scale);
+@@ -1297,3 +1460,20 @@ mod tests {
+         assert_eq!(native_line(&[short, done]).unwrap(), "Wishlist: 1 of 2 ready");
+     }
+ }
++
++#[cfg(test)]
++mod hud_layout_tests {
++    use super::HudLayout;
++
++    #[test]
++    fn the_layout_is_kept_as_fractions_and_read_back() {
++        let layout = HudLayout { life: Some((0.9, 0.05)), meter: None };
++        let text = layout.to_text();
++        assert_eq!(HudLayout::parse(&text), layout);
++        assert_eq!(HudLayout::parse(""), HudLayout::default());
++        // nonsense lines are left out and the fractions kept inside the screen
++        let read = HudLayout::parse("life=2.5,-1\nmeter=a,b\nother=1,1\nnonsense\nmeter=0.5,0.25\n");
++        assert_eq!(read.life, Some((1.0, 0.0)));
++        assert_eq!(read.meter, Some((0.5, 0.25)));
++    }
++}
 diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
 new file mode 100644
-index 0000000..7993214
+index 0000000..ce4a35e
 --- /dev/null
 +++ b/crates/mh3u-rt/src/cheats.rs
-@@ -0,0 +1,555 @@
-+//! Cheats, opt-in: `MH3U_CHEATS=onehit=1000,sharp,god,money=10,items` (the launcher writes it from its Cheats section). Each cheat
+@@ -0,0 +1,491 @@
++//! Cheats, opt-in: `MH3U_CHEATS=onehit=1000,sharp,money=10,items` (the launcher writes it from its Cheats section). Each cheat
 +//! is one row of `CHEATS`: its id, the hooks it needs (names of `mods/hooks.txt`) and how to make the callback of each. To add a
 +//! cheat: write its callback maker, add the row, add the hook to `mods/hooks.txt` and a row to the launcher's `CHEATS` list.
 +//!
@@ -306,12 +498,6 @@ index 0000000..7993214
 +    Cheat {
 +        id: "sharp",
 +        hooks: &[("sharp_change", infinite_sharpness)],
-+        default: 1.0,
-+    },
-+    // invincible: the hits on the hunter do no damage
-+    Cheat {
-+        id: "god",
-+        hooks: &[("hunter_hit", invincible)],
 +        default: 1.0,
 +    },
 +    // more zenny: every gain of zenny is `value` times bigger
@@ -406,6 +592,15 @@ index 0000000..7993214
 +    target != 0 && (g.u32(record + 0x10) == target || g.u32(record + 0x14) == target)
 +}
 +
++/// The most the cheat makes of a hit's base damage. The game works the final damage out from it (zone, sharpness, affinity...) and keeps
++/// it in 16 bits: a bowgun shot with base 27 made 27 000, went over, and did NO damage; 10 000 (what a sword's 10 became) kills the same.
++const MOST_BASE: f32 = 10_000.0;
++
++/// The base damage with the multiplier on, never above [`MOST_BASE`] (and never below what the hit had).
++fn multiplied(damage: f32, times: f32) -> f32 {
++    (damage * times).min(MOST_BASE).max(damage)
++}
++
 +fn one_hit_kill(times: f32) -> Callback {
 +    let acted = AtomicU32::new(0);
 +    Box::new(move |h: &mut Hook| {
@@ -416,51 +611,12 @@ index 0000000..7993214
 +        }
 +        let damage = f32::from_bits(g.u32(record + BASE_DAMAGE));
 +        if damage > 0.0 {
-+            let more = damage * times;
++            let more = multiplied(damage, times);
 +            g.put_u32(record + BASE_DAMAGE, more.to_bits());
 +            let n = acted.fetch_add(1, Relaxed);
 +            if should_log(n) {
 +                eprintln!("[cheats] onehit: hit {} on {target:#x}, base damage {damage} -> {more}", n + 1);
 +            }
-+        }
-+    })
-+}
-+
-+/// What the hunter's hit resolver gets (`hunter_hit` is `f_021283ec(hit check, hunter, hit record, ..)`, the counterpart of
-+/// `hit_resolve` for a hunter that is hit: it works out the damage from the record's base damage `+0x44` and the status
-+/// effects from `+0x54`; `f_0212c098` is its twin for the felyne companions, which is what this hook watched before). With the record's base damage and status amount at 0, a hit does nothing more than push.
-+const STATUS_AMOUNT: u32 = 0x54;
-+
-+fn invincible(_: f32) -> Callback {
-+    let acted = AtomicU32::new(0);
-+    let others = AtomicU32::new(0);
-+    Box::new(move |h: &mut Hook| {
-+        let (hunter, record) = (h.ctx.r[4], h.ctx.r[5]);
-+        let g = Guest::new(h.ctx.mem);
-+        if record == 0 {
-+            return;
-+        }
-+        // only the hunter that plays here: the other players' own games work out their hits
-+        let me = crate::combat::local_hunter(&g);
-+        if me == 0 || hunter != me {
-+            let n = others.fetch_add(1, Relaxed);
-+            if n < 3 {
-+                eprintln!("[cheats] god: a hit on {hunter:#x}, which is not the hunter that plays here ({me:#x}), left alone");
-+            }
-+            return;
-+        }
-+        let before = f32::from_bits(g.u32(record + BASE_DAMAGE));
-+        g.put_u32(record + BASE_DAMAGE, 0.0f32.to_bits());
-+        g.put_u32(record + STATUS_AMOUNT, 0.0f32.to_bits());
-+        let n = acted.fetch_add(1, Relaxed);
-+        if should_log(n) {
-+            eprintln!(
-+                "[cheats] god: hit {} on the hunter {hunter:#x} (attacker class +6 {}), base damage {before} -> 0; type +0x48 {:#x}, flags +0x50 {:#x}",
-+                n + 1,
-+                g.u8(record + 6),
-+                g.u8(record + 0x48),
-+                g.u32(record + 0x50),
-+            );
 +        }
 +    })
 +}
@@ -633,14 +789,23 @@ index 0000000..7993214
 +    use std::collections::BTreeMap;
 +
 +    #[test]
++    fn the_multiplied_damage_stays_under_the_most_the_game_keeps() {
++        assert_eq!(multiplied(10.0, 1000.0), 10_000.0, "a sword's hit as before");
++        assert_eq!(multiplied(7.0, 1000.0), 7_000.0);
++        assert_eq!(multiplied(27.0, 1000.0), MOST_BASE, "a bowgun shot would have gone over 16 bits and done nothing");
++        assert_eq!(multiplied(20_000.0, 1000.0), 20_000.0, "a hit already above is left as it is");
++        assert_eq!(multiplied(5.0, 2.0), 10.0);
++    }
++
++    #[test]
 +    fn the_spec_is_read_piece_by_piece() {
 +        assert_eq!(
-+            parse("onehit=1000, sharp ,MONEY=2.5,bad=x,=3,,god"),
++            parse("onehit=1000, sharp ,MONEY=2.5,bad=x,=3,,items"),
 +            vec![
 +                ("onehit".to_string(), Some(1000.0)),
 +                ("sharp".to_string(), None),
 +                ("money".to_string(), Some(2.5)),
-+                ("god".to_string(), None)
++                ("items".to_string(), None)
 +            ]
 +        );
 +        // a multiplier under 1 or not a number would turn the cheat into a penalty: the piece is left out
@@ -706,12 +871,11 @@ index 0000000..7993214
 +        assert!(!self_hit(&g, 0x100, 0), "no target is nobody's self-hit");
 +    }
 +
-+    /// The five cheats on the hooks they name, run through a registry like the game's.
++    /// The cheats that change the game on the hooks they name, run through a registry like the game's.
 +    #[test]
 +    fn each_cheat_changes_what_it_should_on_its_hook() {
 +        let list: BTreeMap<u32, String> = [
 +            (0x0212_9ef4, "hit_resolve".to_string()),
-+            (0x0212_83ec, "hunter_hit".to_string()),
 +            (0x0259_fc98, "monster_init".to_string()),
 +            (0x0285_f530, "sharp_change".to_string()),
 +            (0x0219_c720, "money_add".to_string()),
@@ -720,6 +884,10 @@ index 0000000..7993214
 +        .into();
 +        let mut r = Registry::new(&list);
 +        for c in CHEATS {
++            // the two read-only helpers read the game's player tables, which this small test memory does not have
++            if matches!(c.id, "monsterhp" | "dmgmeter") {
++                continue;
++            }
 +            for (hook, make) in c.hooks {
 +                assert!(r.on(hook, make(if c.id == "onehit" { 1000.0 } else { 3.0 })), "{} is in the list", hook);
 +            }
@@ -758,53 +926,13 @@ index 0000000..7993214
 +        r.run(0x0219_aeac, &mut ctx);
 +        assert_eq!(ctx.r[5], 0);
 +    }
-+
-+    /// A world with a hunter at 0x2000_0000 that the game's tables say is the one that plays (number 2 of 8).
-+    fn world(g: &Guest) -> u32 {
-+        let (players, game, hunter) = (0x2100_0000u32, 0x2100_1000u32, 0x2000_0000u32);
-+        g.put_u32(0x1031_4b80, players);
-+        g.put_u32(0x101f_db9c, game);
-+        g.put_u8(game + 0x4b, 2);
-+        g.put_u32(players + 0x40 + 4 * 2, hunter);
-+        g.put_u32(hunter + 0xc, 2 << 29);
-+        hunter
-+    }
-+
-+    #[test]
-+    fn invincible_takes_the_damage_and_status_out_of_the_hits_on_the_hunter_that_plays_only() {
-+        let list: BTreeMap<u32, String> = [(0x0212_83ec, "hunter_hit".to_string())].into();
-+        let mut r = Registry::new(&list);
-+        assert!(r.on("hunter_hit", invincible(1.0)));
-+        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
-+        let g = Guest::new(memory.as_mut_ptr());
-+        let hunter = world(&g);
-+        let mut ctx = crate::game::new_ctx(memory.as_mut_ptr());
-+        let record = 0x2200_0000u32;
-+        g.put_u32(record + BASE_DAMAGE, 40.0f32.to_bits());
-+        g.put_u32(record + STATUS_AMOUNT, 25.0f32.to_bits());
-+        ctx.r[4] = hunter;
-+        ctx.r[5] = record;
-+        r.run(0x0212_83ec, &mut ctx);
-+        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 0.0);
-+        assert_eq!(f32::from_bits(g.u32(record + STATUS_AMOUNT)), 0.0);
-+        // another player's hunter (a guest's own game works its hits out): left as it is
-+        g.put_u32(record + BASE_DAMAGE, 40.0f32.to_bits());
-+        ctx.r[4] = 0x2300_0000;
-+        r.run(0x0212_83ec, &mut ctx);
-+        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 40.0);
-+        // and with no player table to look at, nothing is touched either
-+        g.put_u32(0x1031_4b80, 0);
-+        ctx.r[4] = hunter;
-+        r.run(0x0212_83ec, &mut ctx);
-+        assert_eq!(f32::from_bits(g.u32(record + BASE_DAMAGE)), 40.0);
-+    }
 +}
 diff --git a/crates/mh3u-rt/src/combat.rs b/crates/mh3u-rt/src/combat.rs
 new file mode 100644
-index 0000000..70d17ab
+index 0000000..0618629
 --- /dev/null
 +++ b/crates/mh3u-rt/src/combat.rs
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,420 @@
 +//! Read-only combat information for the overlay: the life of the monsters of a quest and what the hunter has done to them.
 +//!
 +//! The monsters are found when the game sets their life at spawn (the hook `monster_init`, `uEnemy::initMaxHp` 0x0259fc98, r3 = the
@@ -830,6 +958,9 @@ index 0000000..70d17ab
 +const HP_NOW: u32 = 0x8b8;
 +const HP_MAX: u32 = 0x8bc;
 +const EM_ID: u32 = 2;
++/// Another reader of the same structure finds the id one byte further (`+3`, with a 1 in `+4`) and the monsters' names came out
++/// wrong with `+2` (a small monster with a large one's name): the diagnostic line of `on_frame` shows the bytes, `monster_id` picks.
++const EM_ID_ALT: u32 = 3;
 +
 +/// The most monsters followed at once.
 +const MOST_MONSTERS: usize = 24;
@@ -979,7 +1110,14 @@ index 0000000..70d17ab
 +        return None;
 +    }
 +    let (now, max) = (g.u32(state + HP_NOW) as i32, g.u32(state + HP_MAX) as i32);
-+    (max > 0 && max <= 5_000_000 && (0..=max).contains(&now)).then(|| (g.u8(state + EM_ID), now, max))
++    (max > 0 && max <= 5_000_000 && (0..=max).contains(&now)).then(|| (monster_id(g, state), now, max))
++}
++
++/// The kind of monster whose state is at `state`: the byte at `+3` when a 1 follows it (the layout the other reader describes),
++/// else the byte at `+2`.
++fn monster_id(g: &Guest, state: u32) -> u8 {
++    let alt = g.u8(state + EM_ID_ALT);
++    if g.u8(state + EM_ID_ALT + 1) == 1 && (1..=85).contains(&alt) { alt } else { g.u8(state + EM_ID) }
 +}
 +
 +/// At each frame swap: reads the monsters and counts what their life went down by. Does nothing when nothing of this is on.
@@ -1002,6 +1140,17 @@ index 0000000..70d17ab
 +                kept.push((address, before));
 +                continue;
 +            };
++            if before < 0 {
++                // the first time this monster is read: the bytes where its id may be, to settle which one is (the next test shows it)
++                let state = g.u32(address + MONSTER_STATE);
++                let b: Vec<String> = (0..8).map(|i| format!("{:02x}", g.u8(state + i))).collect();
++                eprintln!(
++                    "[combat] monster {address:#x} state {state:#x} bytes +0..+7 {}, size float +0xa0 {:#x} +0xa4 {:#x}; life {hp}/{max}, id used {id}",
++                    b.join(" "),
++                    g.u32(state + 0xa0),
++                    g.u32(state + 0xa4)
++                );
++            }
 +            if before > hp {
 +                let fall = before - hp;
 +                s.dealt += i64::from(fall);
@@ -1111,6 +1260,24 @@ index 0000000..70d17ab
 +    }
 +
 +    #[test]
++    fn the_id_is_the_byte_before_a_one_when_there_is_one_and_the_plain_byte_otherwise() {
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        put_monster(&g, 1800, 2000);
++        let state = g.u32(0x2000_0000 + MONSTER_STATE);
++        // the layout where the id is at +3 with a 1 at +4 (a Great Jaggi, 12)
++        g.put_u8(state + 3, 12);
++        g.put_u8(state + 4, 1);
++        assert_eq!(monster_id(&g, state), 12);
++        // no 1 after it, or a number that is no monster: the byte at +2 (25 in `put_monster`)
++        g.put_u8(state + 4, 0);
++        assert_eq!(monster_id(&g, state), 25);
++        g.put_u8(state + 3, 200);
++        g.put_u8(state + 4, 1);
++        assert_eq!(monster_id(&g, state), 25);
++    }
++
++    #[test]
 +    fn what_a_monsters_life_goes_down_by_is_damage_and_the_hunters_own_after_its_hits() {
 +        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
 +        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
@@ -1212,14 +1379,14 @@ index 246ddc0..b245098 100644
          return;
      }
 diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
-index b9a6aae..3e5d4d3 100644
+index b9a6aae..856a2f6 100644
 --- a/crates/mh3u-tools/src/main.rs
 +++ b/crates/mh3u-tools/src/main.rs
 @@ -928,6 +928,8 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
          // the overlay's events (item gains, money, crafts, quest ends; docs/overlay.md)
          // opt-in: the wishlist's status in the item menu's last empty slot (MH3U_NATIVE_TEXT=1; docs/native-menu.md)
          mh3u_rt::native_text::register(&mut registry);
-+        // opt-in: the launcher's Cheats section (MH3U_CHEATS; one hit kill, infinite sharpness, invincible, zenny, items)
++        // opt-in: the launcher's Cheats section (MH3U_CHEATS; one hit kill, infinite sharpness, zenny, items)
 +        mh3u_rt::cheats::register(&mut registry);
          // opt-in, read-only: the start menu's state on each change (MH3U_MENU_PROBE=1; docs/native-menu.md)
          mh3u_rt::menu_probe::register(&mut registry);

@@ -6,6 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLabel, QWidget
 
+import qtanim
 from qtshim import GOLD, GOLD_HOVER, PARCHMENT, font
 
 GRIP = 6  # width of the edges that resize the window
@@ -93,7 +94,7 @@ class TitleBar(QWidget):
         self.btn_min = _CaptionButton("min")
         self.btn_max = _CaptionButton("max")
         self.btn_close = _CaptionButton("close")
-        self.btn_min.clicked.connect(window.showMinimized)
+        self.btn_min.clicked.connect(lambda: qtanim.minimize_window(window))
         self.btn_max.clicked.connect(self.toggle_maximized)
         self.btn_close.clicked.connect(window.close)
         for b in (self.btn_min, self.btn_max, self.btn_close):

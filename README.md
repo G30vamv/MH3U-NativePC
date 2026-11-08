@@ -21,6 +21,7 @@ Compared with the original port, MH3U NativePC adds:
 - **Real AMD FidelityFX Super Resolution 1.0** (EASU + RCAS) or CAS sharpening, a 1x-4x internal resolution and Vulkan or DirectX 12.
 - **Controllers.** DualSense, DualShock 4 and generic gamepads are read straight from the device, with camera sensitivity and layout options and detection of HidHide.
 - **In-game settings** on F1 / F2: resolution, upscaler, sharpness, present mode, FPS counter, language and camera sensitivity, without leaving the game.
+- **Mods and cheats, off until you turn them on.** The **Mods** only read the game and draw over it: the life of the monsters (a big bar for the main ones, a thin bar for the small ones) and a damage meter with DPS, which you can drag with the mouse; they are safe and recommended online too. The **Cheats** change the game (One Hit Kill, infinite sharpness, more zenny, infinite items and ammo): they are not blocked, but they can affect your save and, in an online room, the other players' game, so they are not advised there.
 - **Online rooms.** A room server is built in, with automatic firewall rules (a single UAC prompt) and a guide to play with friends over Radmin VPN. It has been tried with friends and mixed with Cemu players.
 - **Fixes to the picture.** Character colours (a cold blue-green tint) and some textures that used the picture of an old frame.
 - **A clear message instead of a frozen picture** if the graphics card stops answering, and smaller buffers on cards with little memory.

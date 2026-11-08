@@ -1,0 +1,59 @@
+diff --git a/crates/mh3u-gfx/src/front.rs b/crates/mh3u-gfx/src/front.rs
+index 4ce61c9..a27dd95 100644
+--- a/crates/mh3u-gfx/src/front.rs
++++ b/crates/mh3u-gfx/src/front.rs
+@@ -122,6 +122,9 @@ pub struct Front {
+     targets: std::collections::HashSet<u32>,
+     capture: Duration,
+     frames_reported: u32,
++    /// When the last `[gfx mirror]` report was printed (one every `MH3U_TIMES_WINDOW`, not one every 120 frames: at 175 fps that was
++    /// three lines every 0.7 s and three quarters of a long session's log).
++    last_report: Instant,
+     /// Times of the game's thread's share, for the report (only with `MH3U_GFX_FRONT_TIMES`: reading the clock for each call costs a good part of what is measured).
+     timing: bool,
+     tm: Times,
+@@ -204,6 +207,7 @@ pub fn backend(gx2: Gx2, mode: Option<Mode>) -> Box<dyn Gx2Backend> {
+         targets: std::collections::HashSet::new(),
+         capture: Duration::ZERO,
+         frames_reported: 0,
++        last_report: Instant::now(),
+         timing: false,
+         tm: Times::default(),
+         ahead: FRAMES_AHEAD,
+@@ -460,12 +464,16 @@ impl Front {
+         }
+     }
+ 
+-    /// Every 120 frames: what the copy cost, by the kind of thing copied.
++    /// Every report window (`MH3U_TIMES_WINDOW`, 10 s) and at least 120 frames: what the copy cost, by the kind of thing copied.
+     fn report(&mut self) {
+         self.frames_reported += 1;
+         if self.frames_reported < 120 || std::env::var_os("MH3U_GFX_TIMES").is_none() && std::env::var_os("MH3U_FPS").is_none() {
+             return;
+         }
++        if self.last_report.elapsed() < mh3u_rt::times_window() {
++            return;
++        }
++        self.last_report = Instant::now();
+         let n = f64::from(self.frames_reported);
+         let names = ["shaders", "textures", "targets", "uniforms", "indices", "vertices", "other calls", "unsorted"];
+         let parts: Vec<String> = names
+diff --git a/crates/mh3u-rt/src/kernel.rs b/crates/mh3u-rt/src/kernel.rs
+index 71f711b..4525c81 100644
+--- a/crates/mh3u-rt/src/kernel.rs
++++ b/crates/mh3u-rt/src/kernel.rs
+@@ -433,6 +433,14 @@ pub fn retire(guard: MutexGuard<'static, Option<Kernel>>) -> ! {
+     let mut guard = hand_on_for_good(guard);
+     guard.as_mut().expect("kernel").baton.exited += 1;
+     drop(guard);
++    // The translated frames below this one hold no destructors and nothing waits on the thread, so on Windows it ends here and its
++    // stack is freed (parking left one host thread per ended guest thread: about 30 a minute, thousands in a long session).
++    #[cfg(windows)]
++    // SAFETY: the kernel lock is released and only translated (C) frames are on this stack
++    unsafe {
++        windows_sys::Win32::System::Threading::ExitThread(0)
++    }
++    #[cfg(not(windows))]
+     loop {
+         std::thread::park();
+     }

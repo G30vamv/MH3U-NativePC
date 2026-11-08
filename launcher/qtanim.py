@@ -179,6 +179,41 @@ def fade_window_in(window, ms=200):
     anim.start()
 
 
+def minimize_window(window, ms=170):
+    """Minimises the window softly: it fades out while it sinks a little towards the taskbar, then Windows minimises it. The window
+    is put back in its place and opaque while it is minimised, so restoring it finds it whole (`fade_window_in` shows it again).
+    With animations off, or if it is already going down, it minimises at once."""
+    if not enabled() or window.isMinimized() or getattr(window, "_minimizing", None) is not None:
+        window.showMinimized()
+        return
+    start = window.pos()
+    group = QParallelAnimationGroup(window)
+    fade = QPropertyAnimation(window, b"windowOpacity", window)
+    fade.setDuration(ms)
+    fade.setStartValue(1.0)
+    fade.setEndValue(0.0)
+    fade.setEasingCurve(QEasingCurve.Type.InCubic)
+    group.addAnimation(fade)
+    if not window.isMaximized():
+        sink = QPropertyAnimation(window, b"pos", window)
+        sink.setDuration(ms)
+        sink.setStartValue(start)
+        sink.setEndValue(QPoint(start.x(), start.y() + 36))
+        sink.setEasingCurve(QEasingCurve.Type.InCubic)
+        group.addAnimation(sink)
+
+    def done():
+        window._minimizing = None
+        if not window.isMaximized():
+            window.move(start)
+        window.showMinimized()
+        window.setWindowOpacity(1.0)
+
+    group.finished.connect(done)
+    window._minimizing = group
+    group.start()
+
+
 def intro(parts, first_delay=60, step=90, ms=420):
     """The parts of the window (header, tabs, page, footer) come in one after the other, rising a little, when the launcher opens."""
     for i, part in enumerate(parts):

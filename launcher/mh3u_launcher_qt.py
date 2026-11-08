@@ -10,7 +10,7 @@ import sys
 import threading
 import webbrowser
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,6 +32,8 @@ import winfx
 from core import (
     APP_VERSION,
     CHEATS,
+    MODS,
+    mod_enabled,
     DEFAULT_OUT_DIR,
     LauncherLogic,
     get_assets_dir,
@@ -162,6 +164,13 @@ class Window(QWidget):
 
     def changeEvent(self, event):
         super().changeEvent(event)
+        # coming back from the taskbar: the window appears softly (it went down softly, see qtanim.minimize_window)
+        if (
+            event.type() == QEvent.Type.WindowStateChange
+            and bool(event.oldState() & Qt.WindowState.WindowMinimized)
+            and not self.isMinimized()
+        ):
+            qtanim.fade_window_in(self, 170)
         if hasattr(self._app, "titlebar"):
             self._app.titlebar.sync()
             qttitle.place_grips(self)
@@ -500,7 +509,7 @@ class MH3ULauncherApp(LauncherLogic):
         self._quick_items = [
             ("scale", "Resolución interna"), ("upscaler", "Reescalado"), ("present", "VSync"), ("backend", "API gráfica"),
             ("window", "Pantalla"), ("fps", "Contador de FPS"), ("input", "Entrada"), ("layout", "Disposición del mando"),
-            ("sens", "Sensibilidad de cámara"), ("mods", "Mods nativos"), ("audio", "Audio"), ("lto", "Compilación LTO"),
+            ("sens", "Sensibilidad de cámara"), ("mods", "Mods"), ("audio", "Audio"), ("lto", "Compilación LTO"),
             ("online", "Online"), ("discord", "Discord Rich Presence"),
         ]
         self._quick_labels = {}
@@ -561,7 +570,8 @@ class MH3ULauncherApp(LauncherLogic):
         sharp = int(c.get("fsr_sharpness", 75))
         upscaler = {"fsr": f"FSR 1.0 · nitidez {sharp} %", "cas": f"AMD CAS · nitidez {sharp} %"}.get(c.get("upscaler", "fsr"), "Desactivado")
         present = {"mailbox": "Mailbox (Fast-Sync)", "fifo": "VSync clásico (Fifo)", "immediate": "Desactivado"}.get(c.get("present_mode", "mailbox"), "Mailbox")
-        mods = [n for k, n in (("overlay", "Overlay F1"), ("native_menu", "Menú en pausa"), ("native_text", "Estado de forja")) if c.get(k, True)]
+        mods = []
+        mods += [m["label"].split(" en pantalla")[0] for m in MODS if mod_enabled(c, m["id"])]
         audio = [n for k, n in (("audio", "Sonido"), ("audio_fx", "Efectos")) if c.get(k, True)]
         online = self.lbl_quick_online.text().replace("Online:", "").strip() or "Comprobando..."
         online_color = green if "Activ" in online and "Desactiv" not in online else grey
@@ -745,14 +755,21 @@ class MH3ULauncherApp(LauncherLogic):
         cols.addWidget(gfx, 1, Qt.AlignmentFlag.AlignTop)
 
         right, r = _card("card")
-        r.addWidget(Label("Mejoras & Mods Nativos", "#eab84c", 12.5, bold=True))
-        self.chk_overlay = CheckBox("Overlay de Lista de Deseos de Forja (Tecla F1)", self.save_settings_from_ui)
-        self.chk_native_menu = CheckBox("Menú de Mods en Pausa (Mantener R-Shift/ZL en Menú Pausa -> Cazador)", self.save_settings_from_ui)
-        self.chk_native_text = CheckBox("Estado de Forja en el menú de objetos del juego", self.save_settings_from_ui)
-        for chk, key in ((self.chk_overlay, "overlay"), (self.chk_native_menu, "native_menu"), (self.chk_native_text, "native_text")):
-            if self.config.get(key, True):
+        r.addWidget(Label("Mods", "#eab84c", 12.5, bold=True))
+        self.chk_overlay = CheckBox("Overlay en el juego (F1: ajustes y mover paneles; F2: ajustes)", self.save_settings_from_ui)
+        if self.config.get("overlay", True):
+            self.chk_overlay.select()
+        r.addWidget(self.chk_overlay)
+        _tip(self.chk_overlay, "💡 Con F1 se abre el panel de ajustes y controles y se pueden arrastrar los paneles de los mods; con F2 solo los ajustes rápidos.")
+
+        self.chk_mod = {}
+        for m in MODS:
+            chk = CheckBox(m["label"], self.save_mods_from_ui)
+            if mod_enabled(self.config, m["id"]):
                 chk.select()
+            self.chk_mod[m["id"]] = chk
             r.addWidget(chk)
+            _tip(chk, m["hint"])
 
         r.addWidget(Label("Trucos (cheats)", "#e07a6f", 10.5, bold=True))
         warn = _hint("⚠ Pueden alterar o corromper tu partida guardada. Haz una copia antes (pestaña «Partidas & Logs») y úsalos bajo tu propia decisión.", "#eab84c")

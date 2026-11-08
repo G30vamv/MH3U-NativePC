@@ -19,6 +19,20 @@ class CheatsEnvTests(unittest.TestCase):
         config = {"cheats_enabled": True, "cheat_money": True, "cheat_money_value": 5, "cheat_onehit": True, "cheat_sharp": True}
         self.assertEqual(core.build_cheats_env(config), "onehit=1000,sharp,money=5")
 
+    def test_the_mods_go_to_the_engine_on_their_own_and_after_the_cheats(self):
+        # the cheats' master switch does not hold them back: they only read
+        self.assertEqual(core.build_cheats_env({"mod_monsterhp": True}), "monsterhp")
+        self.assertEqual(core.build_cheats_env({"mod_dmgmeter": True, "mod_monsterhp": True}), "monsterhp,dmgmeter")
+        config = {"cheats_enabled": True, "cheat_sharp": True, "mod_dmgmeter": True}
+        self.assertEqual(core.build_cheats_env(config), "sharp,dmgmeter")
+        # off with the cheats off, and each one apart from the other
+        self.assertEqual(core.build_cheats_env({"cheats_enabled": False, "cheat_sharp": True, "mod_monsterhp": True}), "monsterhp")
+
+    def test_a_configuration_from_when_the_mods_were_cheats_keeps_them_on(self):
+        self.assertTrue(core.mod_enabled({"cheat_monsterhp": True}, "monsterhp"))
+        self.assertFalse(core.mod_enabled({"cheat_monsterhp": True, "mod_monsterhp": False}, "monsterhp"))
+        self.assertFalse(core.mod_enabled({}, "dmgmeter"))
+
     def test_a_multiplier_that_is_not_a_number_or_out_of_range_is_put_back_in_range(self):
         c = next(c for c in core.CHEATS if c["id"] == "onehit")
         self.assertEqual(core.cheat_value({"cheat_onehit_value": "abc"}, c), 1000)
@@ -124,6 +138,7 @@ class CheatHooksInTheBuildTests(unittest.TestCase):
     def all_on(self):
         config = {"cheats_enabled": True}
         config.update({f"cheat_{c['id']}": True for c in core.CHEATS})
+        config.update({f"mod_{m['id']}": True for m in core.MODS})
         return config
 
     def test_the_hooks_of_a_build_are_read_by_name(self):
@@ -133,7 +148,12 @@ class CheatHooksInTheBuildTests(unittest.TestCase):
 
     def test_a_build_without_hooks_lacks_every_hook_the_cheats_need(self):
         self.build_hooks("")
-        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["hit_resolve", "hunter_hit", "item_to_pouch", "money_add", "monster_init", "sharp_change"])
+        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["hit_resolve", "item_to_pouch", "money_add", "monster_init", "sharp_change"])
+
+    def test_the_mods_need_their_hooks_even_with_the_cheats_off(self):
+        self.build_hooks("")
+        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": False, "mod_monsterhp": True}, self.out), ["monster_init"])
+        self.assertEqual(core.missing_cheat_hooks({"mod_dmgmeter": True}, self.out), ["hit_resolve", "monster_init"])
 
     def test_only_the_hooks_of_the_cheats_that_are_on_are_needed(self):
         self.build_hooks("0x0219c720 money_add\n")
@@ -142,7 +162,7 @@ class CheatHooksInTheBuildTests(unittest.TestCase):
         self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": False, "cheat_sharp": True}, self.out), [])
 
     def test_every_cheat_has_its_hooks_named_and_they_are_in_the_package_list(self):
-        self.assertEqual(set(core.CHEAT_HOOKS), {c["id"] for c in core.CHEATS})
+        self.assertEqual(set(core.CHEAT_HOOKS), {c["id"] for c in core.CHEATS} | {m["id"] for m in core.MODS})
         here = os.path.dirname(__file__)
         with open(os.path.join(here, "..", "package", "mods", "hooks.txt"), encoding="utf-8") as f:
             names = {line.split("#")[0].split()[-1] for line in f if line.split("#")[0].strip()}
