@@ -129,6 +129,66 @@ class UpdaterTests(unittest.TestCase):
         with open(os.path.join(base, "file.txt"), "rb") as f:
             self.assertEqual(f.read(), b"NEW")
 
+    def test_a_504_from_github_is_retried(self):
+        """Regression: one 'HTTP Error 504' made the whole update check fail."""
+        import io
+        import urllib.error
+        from unittest import mock
+
+        calls = []
+
+        def flaky(url, timeout=30):
+            calls.append(url)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError(url, 504, "Gateway Time-out", {}, None)
+            return io.BytesIO(json.dumps({"version": "9.9.9", "files": []}).encode())
+
+        with mock.patch.object(updater, "_open", flaky), mock.patch.object(updater.time, "sleep"):
+            self.assertEqual(updater.fetch_manifest()["version"], "9.9.9")
+        self.assertEqual(len(calls), 3)
+
+    def test_a_404_or_a_bad_file_is_not_retried(self):
+        import urllib.error
+        from unittest import mock
+
+        calls = []
+
+        def missing(url, timeout=30):
+            calls.append(url)
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+        with mock.patch.object(updater, "_open", missing), mock.patch.object(updater.time, "sleep"):
+            with self.assertRaises(updater.UpdateError):
+                updater.fetch_manifest()
+        self.assertEqual(len(calls), 1)
+
+    def test_a_dropped_download_starts_the_file_again(self):
+        import io
+        from unittest import mock
+
+        data = b"x" * 1000
+        attempts = []
+
+        class Dropping(io.BytesIO):
+            def read(self, n=-1):
+                chunk = super().read(n)
+                if len(attempts) == 1 and self.tell() > 0:
+                    raise ConnectionResetError("dropped")
+                return chunk
+
+        def opener(url, timeout=30):
+            attempts.append(url)
+            return Dropping(data)
+
+        todo = [{"rel": "file.txt", "url": "http://x/file.txt", "sha256": _sha(data), "size": len(data)}]
+        seen = []
+        with mock.patch.object(updater, "_open", opener), mock.patch.object(updater.time, "sleep"):
+            stage = updater.download_files(todo, self.base, progress=lambda f, r: seen.append(f))
+        with open(os.path.join(stage, "file.txt"), "rb") as f:
+            self.assertEqual(f.read(), data)
+        self.assertEqual(len(attempts), 2)
+        self.assertLessEqual(max(seen), 1.0)
+
     def test_clean_env_drops_pyinstaller_state(self):
         """Regression: the relaunched onefile exe inherited _MEIPASS2/_PYI_* and failed to load python3xx.dll."""
         os.environ["_PYI_APPLICATION_HOME_DIR"] = "C:/old/_MEI123"

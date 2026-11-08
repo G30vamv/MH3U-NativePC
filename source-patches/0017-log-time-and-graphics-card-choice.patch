@@ -1,0 +1,258 @@
+diff --git a/crates/mh3u-gfx/src/front.rs b/crates/mh3u-gfx/src/front.rs
+index a27dd95..0dab850 100644
+--- a/crates/mh3u-gfx/src/front.rs
++++ b/crates/mh3u-gfx/src/front.rs
+@@ -221,6 +221,7 @@ fn run(mut gx2: Gx2, rx: Receiver<Msg>, pending: Pending, pool: mirror::Pool) {
+         Ok(m) => m,
+         Err(e) => {
+             eprintln!("[gfx] the copy of the guest's memory could not be made: {e:#}");
++            mh3u_rt::logstamp::drain();
+             std::process::exit(1);
+         }
+     };
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index b0d6b83..f7c17d8 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -80,13 +80,27 @@ impl Display {
+             ..wgpu::InstanceDescriptor::new_without_display_handle()
+         });
+         let surface = instance.create_surface(window.clone()).context("creating the window's surface")?;
+-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+-            power_preference: wgpu::PowerPreference::HighPerformance,
+-            compatible_surface: Some(&surface),
+-            force_fallback_adapter: false,
+-            ..Default::default()
+-        }))
+-        .context("no graphics adapter")?;
++        // MH3U_GFX_ADAPTER=<part of a name> picks that graphics card (the launcher's "Graphics card" list); no match: the usual choice
++        let wanted = std::env::var("MH3U_GFX_ADAPTER").ok().map(|n| n.trim().to_ascii_lowercase()).filter(|n| !n.is_empty());
++        let chosen = wanted.as_deref().and_then(|name| {
++            let all = pollster::block_on(instance.enumerate_adapters(backends));
++            let found = all.iter().position(|a| a.get_info().name.to_ascii_lowercase().contains(name) && a.is_surface_supported(&surface));
++            if found.is_none() {
++                let names: Vec<String> = all.iter().map(|a| a.get_info().name).collect();
++                eprintln!("[gfx] MH3U_GFX_ADAPTER={name:?} matches none of {names:?}: using the default card");
++            }
++            found.map(|i| all.into_iter().nth(i).expect("index just found"))
++        });
++        let adapter = match chosen {
++            Some(adapter) => adapter,
++            None => pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
++                power_preference: wgpu::PowerPreference::HighPerformance,
++                compatible_surface: Some(&surface),
++                force_fallback_adapter: false,
++                ..Default::default()
++            }))
++            .context("no graphics adapter")?,
++        };
+         let info = adapter.get_info();
+         eprintln!("[gfx] adapter: {} ({:?}, {:?}), driver {} {}", info.name, info.backend, info.device_type, info.driver, info.driver_info);
+         let features = adapter.features();
+diff --git a/crates/mh3u-gfx/src/lost.rs b/crates/mh3u-gfx/src/lost.rs
+index 0497d56..04a87bf 100644
+--- a/crates/mh3u-gfx/src/lost.rs
++++ b/crates/mh3u-gfx/src/lost.rs
+@@ -49,6 +49,7 @@ pub(crate) fn on_lost(reason: wgpu::DeviceLostReason, text: &str) {
+     eprintln!("[gfx] closing the game");
+     let (title, body) = message(Lang::parse(std::env::var("MH3U_UI_LANG").ok().as_deref()));
+     mh3u_rt::error_box(title, body);
++    mh3u_rt::logstamp::drain();
+     std::process::exit(1);
+ }
+ 
+diff --git a/crates/mh3u-rt/Cargo.toml b/crates/mh3u-rt/Cargo.toml
+index d90432a..0eb4c59 100644
+--- a/crates/mh3u-rt/Cargo.toml
++++ b/crates/mh3u-rt/Cargo.toml
+@@ -23,4 +23,4 @@ memmap2 = "0.9"
+ 
+ # the guest's memory is reserved and committed on first touch (see src/memory.rs)
+ [target.'cfg(windows)'.dependencies]
+-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Memory", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
++windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Memory", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_SystemInformation"] }
+diff --git a/crates/mh3u-rt/src/game.rs b/crates/mh3u-rt/src/game.rs
+index 7cd2a7f..a63bddf 100644
+--- a/crates/mh3u-rt/src/game.rs
++++ b/crates/mh3u-rt/src/game.rs
+@@ -97,6 +97,7 @@ pub fn stop_unlocked(why: String) -> ! {
+             print_report(k, &why);
+         }
+     }
++    crate::logstamp::drain();
+     std::process::exit(2);
+ }
+ 
+@@ -851,6 +852,7 @@ pub fn run(library: &Path, pieces: &[Piece], options: Options) -> Result<Report>
+                 for (addr, n) in v.iter().take(25) {
+                     println!("profile {n:>6}  {addr:#x}");
+                 }
++                crate::logstamp::drain();
+                 std::process::exit(0);
+             });
+         }
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index 835b283..41b94a1 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -20,6 +20,7 @@ pub fn new_test_ctx() -> Ctx {
+ pub mod cheats;
+ pub mod combat;
+ pub mod input;
++pub mod logstamp;
+ mod kernel;
+ mod memory;
+ pub use memory::GuestMemory;
+diff --git a/crates/mh3u-rt/src/logstamp.rs b/crates/mh3u-rt/src/logstamp.rs
+new file mode 100644
+index 0000000..12ed2cb
+--- /dev/null
++++ b/crates/mh3u-rt/src/logstamp.rs
+@@ -0,0 +1,108 @@
++//! The time at the start of every line the game prints, so a log can be set beside the server's (`[14:03:22.481] [gfx frames] ...`).
++//!
++//! On Windows the process's standard output and error are pointed at a pipe of our own; a thread reads it line by line and writes each
++//! line, with the local time, to what they were before (the launcher's log file). `MH3U_LOG_TIME=off` leaves the log as it was; nothing is
++//! changed when the output is a console. Whoever ends the process on purpose calls [`drain`] first, so the last lines are not lost.
++
++#[cfg(windows)]
++mod imp {
++    use std::io::{BufRead, BufReader, IsTerminal, Write};
++    use std::os::windows::io::FromRawHandle;
++    use std::sync::atomic::{AtomicU32, Ordering};
++    use std::time::{Duration, Instant};
++
++    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
++    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
++    use windows_sys::Win32::System::Pipes::CreatePipe;
++    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
++
++    /// A line only the pump understands: when it has been read, every line before it is already written.
++    const MARK: &[u8] = b"\x01drain\n";
++    static ASKED: AtomicU32 = AtomicU32::new(0);
++    static ANSWERED: AtomicU32 = AtomicU32::new(0);
++    static ON: AtomicU32 = AtomicU32::new(0);
++
++    pub fn install() {
++        if std::env::var("MH3U_LOG_TIME").is_ok_and(|v| v.eq_ignore_ascii_case("off")) || std::io::stderr().is_terminal() {
++            return;
++        }
++        // SAFETY: plain Win32 calls; the handles made here are handed to the pump thread or leaked on purpose (they live as long as the process)
++        unsafe {
++            let before = GetStdHandle(STD_ERROR_HANDLE);
++            if before.is_null() || before == INVALID_HANDLE_VALUE {
++                return;
++            }
++            let (mut read, mut write) = (std::ptr::null_mut(), std::ptr::null_mut());
++            if CreatePipe(&mut read, &mut write, std::ptr::null(), 1 << 20) == 0 {
++                return;
++            }
++            let reader = std::fs::File::from_raw_handle(read as _);
++            let sink = std::fs::File::from_raw_handle(before as _);
++            if std::thread::Builder::new().name("log-time".into()).spawn(move || pump(reader, sink)).is_err() {
++                return;
++            }
++            SetStdHandle(STD_ERROR_HANDLE, write);
++            SetStdHandle(STD_OUTPUT_HANDLE, write);
++        }
++        ON.store(1, Ordering::SeqCst);
++        let hook = std::panic::take_hook();
++        std::panic::set_hook(Box::new(move |info| {
++            hook(info);
++            drain();
++        }));
++    }
++
++    fn pump(reader: std::fs::File, mut sink: std::fs::File) {
++        let mut reader = BufReader::with_capacity(1 << 16, reader);
++        let (mut line, mut out) = (Vec::with_capacity(512), Vec::with_capacity(600));
++        loop {
++            line.clear();
++            match reader.read_until(b'\n', &mut line) {
++                Ok(0) | Err(_) => return,
++                Ok(_) => {}
++            }
++            if line == MARK {
++                ANSWERED.fetch_add(1, Ordering::SeqCst);
++                continue;
++            }
++            out.clear();
++            stamp(&mut out);
++            out.extend_from_slice(&line);
++            let _ = sink.write_all(&out);
++        }
++    }
++
++    fn stamp(out: &mut Vec<u8>) {
++        // SAFETY: GetLocalTime only fills the struct it is given
++        let t = unsafe {
++            let mut t = std::mem::zeroed();
++            GetLocalTime(&mut t);
++            t
++        };
++        let _ = write!(out, "[{:02}:{:02}:{:02}.{:03}] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
++    }
++
++    /// Waits (at most 300 ms) until everything printed so far is in the log.
++    pub fn drain() {
++        if ON.load(Ordering::SeqCst) == 0 {
++            return;
++        }
++        let me = ASKED.fetch_add(1, Ordering::SeqCst) + 1;
++        let _ = std::io::stderr().write_all(MARK);
++        let start = Instant::now();
++        while ANSWERED.load(Ordering::SeqCst) < me && start.elapsed() < Duration::from_millis(300) {
++            std::thread::sleep(Duration::from_millis(1));
++        }
++    }
++}
++
++#[cfg(windows)]
++pub use imp::{drain, install};
++
++/// Not done off Windows.
++#[cfg(not(windows))]
++pub fn install() {}
++
++/// Not needed off Windows.
++#[cfg(not(windows))]
++pub fn drain() {}
+diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
+index 623a58c..fc0f9ec 100644
+--- a/crates/mh3u-tools/src/main.rs
++++ b/crates/mh3u-tools/src/main.rs
+@@ -174,7 +174,17 @@ fn dump(game_dir: &Path) -> Result<Dump> {
+     Dump::locate(&expand_home(&game_dir.to_string_lossy()))
+ }
+ 
+-fn main() -> Result<()> {
++fn main() {
++    // the error is printed here (not by the runtime after `main` returns) so the log has it before the process ends
++    if let Err(e) = real_main() {
++        eprintln!("Error: {e:?}");
++        mh3u_rt::logstamp::drain();
++        std::process::exit(1);
++    }
++    mh3u_rt::logstamp::drain();
++}
++
++fn real_main() -> Result<()> {
+     match Cli::parse().command {
+         Tool::Dump { game_dir } => {
+             let d = dump(&game_dir)?;
+@@ -286,6 +296,7 @@ fn main() -> Result<()> {
+             fullscreen,
+             max_imports,
+         } => {
++            mh3u_rt::logstamp::install();
+             let save = save_dir.unwrap_or_else(|| c_dir.join("save"));
+             run_game(&dump(&game_dir)?, &c_dir, max_imports, save, window, fullscreen)
+         }
+@@ -981,6 +992,7 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
+         if let Err(e) = finish(options) {
+             eprintln!("{e:#}");
+         }
++        mh3u_rt::logstamp::drain();
+         std::process::exit(0);
+     })
+ }

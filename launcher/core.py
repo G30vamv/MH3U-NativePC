@@ -20,8 +20,9 @@ import struct
 import uuid
 import re
 import hidhide
+import i18n
 import netcheck
-from qtshim import END, filedialog, messagebox
+from qtshim import END, filedialog, license_dialog, messagebox
 import socket
 import webbrowser
 
@@ -31,11 +32,16 @@ except Exception:  # optional: falls back to the full-zip download
     toolchain_installer = None
 
 try:
+    import dxc_installer
+except Exception:  # the DirectX 12 helper download is optional
+    dxc_installer = None
+
+try:
     import updater
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.13"
+APP_VERSION = "v0.9.14"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -486,14 +492,46 @@ def read_hunter_name_from_file(file_path):
     return None
 
 
-def get_hunter_name_from_save(out_dir):
+GPU_SKIP = ("microsoft basic", "remote", "virtual", "parsec", "indirect", "meta ", "displaylink", "citrix", "vmware", "hyper-v")
+
+
+def list_graphics_cards(timeout=8):
+    """Names of the PC's real graphics cards (Windows), without duplicates; [] if they cannot be read."""
+    if sys.platform != "win32":
+        return []
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }"],
+            capture_output=True, text=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW,
+        ).stdout
+    except Exception:
+        return []
+    names = []
+    for line in out.splitlines():
+        name = line.strip()
+        if name and not any(w in name.lower() for w in GPU_SKIP) and name not in names:
+            names.append(name)
+    return names
+
+
+SEPARATE_SAVE_DIR = "partidas_aparte"
+
+
+def save_dir_for(config, out_dir=None, base_dir=None):
+    """Where this launcher's saved games are: the game's own folder, or (separate_save) one beside the launcher."""
+    if config.get("separate_save", False):
+        return os.path.join(base_dir or get_base_dir(), SEPARATE_SAVE_DIR)
+    return os.path.join(out_dir or config.get("out_dir", DEFAULT_OUT_DIR), "save")
+
+
+def get_hunter_name_from_save(out_dir, save_dir=None):
     """
     Finds the active hunter's name by inspecting save files (user1, user2, user3)
     in out_dir/save, prioritizing the most recently modified save file.
     """
     if not out_dir:
         return None
-    save_dir = os.path.join(out_dir, "save")
+    save_dir = save_dir or os.path.join(out_dir, "save")
     if not os.path.exists(save_dir):
         return None
 
@@ -554,6 +592,7 @@ class DiscordRPCManager:
     def update_presence(self, details="Cazando", state="Cazador", large_text="Monster Hunter 3 Ultimate (MH3U NativePC)"):
         if not self.connected or not self.pipe:
             return False
+        details, state = i18n.t(details), i18n.t(state)  # what Discord shows follows the launcher's language
         try:
             activity = {
                 "details": details,
@@ -622,6 +661,9 @@ class LauncherLogic:
             "discord_rpc": True,
             "discord_client_id": DEFAULT_DISCORD_CLIENT_ID,
             "gfx_backend": "vulkan",
+            "gfx_adapter": "",  # "" = the game picks the card; otherwise a card's name (MH3U_GFX_ADAPTER)
+            "dxc_declined": False,  # the player said no to installing Microsoft's shader compiler for DirectX 12
+            "separate_save": False,  # keep this launcher's saved games apart (to play beside Cemu on one PC)
             "present_mode": "mailbox",
             "upscaler": "fsr",
             "fsr_sharpness": 75,
@@ -669,7 +711,7 @@ class LauncherLogic:
             defaults["out_dir"] = DEFAULT_OUT_DIR
 
         # Auto-detect hunter name from existing save file if default or empty
-        detected_hunter = get_hunter_name_from_save(defaults.get("out_dir", DEFAULT_OUT_DIR))
+        detected_hunter = get_hunter_name_from_save(defaults.get("out_dir", DEFAULT_OUT_DIR), save_dir_for(defaults))
         if detected_hunter:
             if defaults.get("hunter_name", "Hunter") == "Hunter" or not defaults.get("hunter_name"):
                 defaults["hunter_name"] = detected_hunter
@@ -721,6 +763,8 @@ class LauncherLogic:
         """Shows the configuration in the widgets again after it changed outside them (the window overrides this)."""
 
     def on_ui_language_changed(self, value):
+        """The language of the launcher and of the game's panels (F1, F2): Automatic follows Windows (English if it is neither)."""
+        before = i18n.language()
         if "Español" in value:
             self.config["ui_language"] = "es"
         elif "English" in value:
@@ -728,6 +772,24 @@ class LauncherLogic:
         else:
             self.config["ui_language"] = "auto"
         self.save_config()
+        if self.language() == before:
+            return
+        if self.is_running:
+            messagebox.showinfo("Idioma", "El cambio de idioma se aplicará la próxima vez que abras el launcher.")
+        elif messagebox.askyesno("Idioma", "Para cambiar el idioma hay que reiniciar el launcher.\n¿Reiniciarlo ahora?"):
+            self.restart_launcher()
+
+    def restart_launcher(self):
+        """Opens the launcher again (in the language now chosen) and closes this one."""
+        try:
+            args = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, os.path.abspath(sys.argv[0])]
+            env = updater.clean_env() if updater else None
+            flags = 0x00000008 | 0x00000200 if sys.platform == "win32" else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            subprocess.Popen(args, env=env, creationflags=flags, close_fds=True)
+        except Exception as e:
+            messagebox.showerror("Idioma", f"No se pudo reiniciar el launcher: {e}")
+            return
+        self.window.close()
 
     def save_config(self):
         """Saves current configuration to JSON file."""
@@ -867,9 +929,83 @@ class LauncherLogic:
         self.config["gpu_thread"] = "on" if "Siempre" in value else "off" if "Apagad" in value else "auto"
         self.save_config()
 
+    def _dxc_ok_to_play(self):
+        """DirectX 12 without Microsoft's shader compiler (the two DLLs) can draw wrongly (black shadows and objects on some cards):
+        say so once and offer to install it. False = do not start the game now (the player chose to install it)."""
+        if (
+            self.config.get("gfx_backend", "vulkan") != "dx12"
+            or not dxc_installer
+            or dxc_installer.installed(get_base_dir())
+            or self.config.get("dxc_declined", False)
+        ):
+            return True
+        if messagebox.askyesno(
+            "DirectX 12",
+            "DirectX 12 funciona mejor con la ayuda de Microsoft (dos archivos, unos 11 MB): sin ella, en algunas tarjetas el juego se "
+            "dibuja mal (sombras y objetos en negro) y los shaders tardan mucho más en prepararse.\n\n"
+            "¿Instalarla ahora? Verás sus condiciones de licencia antes de descargar; después vuelve a pulsar JUGAR.\n"
+            "Si eliges «Jugar así», el juego se abre igual con DirectX 12 (puede verse en negro) y no se volverá a preguntar; puedes instalarla "
+            "cuando quieras con el botón de la pestaña Gráficos.",
+            yes="Instalar ahora",
+            no="Jugar así (puede verse negro)",
+        ):
+            self.start_install_dxc()
+            return False
+        self.config["dxc_declined"] = True
+        self.save_config()
+        return True
+
+    def on_adapter_changed(self, value):
+        """The Graphics card list: the first entry is "Automatic" (empty), the others hold the card's name."""
+        self.config["gfx_adapter"] = "" if value.startswith("Autom") else value
+        self.save_config()
+
+    def on_separate_save_toggled(self):
+        self.config["separate_save"] = bool(self.chk_separate_save.get())
+        self.save_config()
+
+    def start_install_dxc(self):
+        """The button that only DirectX 12 shows: Microsoft's terms first, then the download."""
+        if not dxc_installer or getattr(self, "is_installing_dxc", False):
+            return
+        terms = dxc_installer.license_text(self.assets_dir) or f"Consulta las condiciones en {dxc_installer.LICENSE_URL}"
+        accepted = license_dialog(
+            "Ayuda de DirectX 12 (Microsoft)",
+            "Para acelerar DirectX 12 se descargarán dxcompiler.dll y dxil.dll desde la publicación oficial de Microsoft "
+            f"({dxc_installer.RELEASE} de DirectX Shader Compiler). No forman parte de este programa: son de Microsoft y se "
+            "usan bajo sus condiciones de licencia, que debes leer y aceptar para continuar:",
+            terms,
+        )
+        if not accepted:
+            return
+        self.is_installing_dxc = True
+        self.btn_install_dxc.configure(state="disabled")
+        self._log("Descargando la ayuda de DirectX 12 (Microsoft DirectX Shader Compiler)...")
+        threading.Thread(target=self._install_dxc_worker, daemon=True).start()
+
+    def _install_dxc_worker(self):
+        try:
+            dxc_installer.install(
+                get_base_dir(),
+                progress=lambda f: self.ui_queue.put(("progress", max(0.05, f))),
+                log=self._log,
+            )
+            self.ui_queue.put(("progress", 1.0))
+            self.ui_queue.put(("info", ("DirectX 12", "Listo. La próxima vez que abras el juego con DirectX 12 compilará los shaders mucho más rápido.")))
+        except Exception as e:
+            self._log(f"Error instalando la ayuda de DirectX 12: {e}")
+            self.ui_queue.put(("error", ("DirectX 12", f"No se pudo instalar: {e}")))
+            self.ui_queue.put(("progress", 0))
+        finally:
+            self.is_installing_dxc = False
+            self.ui_queue.put(("dxc_button", None))
+
     def on_backend_changed(self, value):
         self.config["gfx_backend"] = "dx12" if "DirectX" in value else "vulkan"
+        self.config["dxc_declined"] = False  # choosing DirectX 12 again asks again
         self.save_config()
+        if hasattr(self, "btn_install_dxc"):
+            self.refresh_dxc_button()
         if hasattr(self, "lbl_quick_backend"):
             self.lbl_quick_backend.configure(text=f"API Gráfica: {'DirectX 12' if self.config['gfx_backend'] == 'dx12' else 'Vulkan'}")
 
@@ -1214,6 +1350,19 @@ class LauncherLogic:
         exe = self._find_server_exe()
         if exe:
             self._kill_stale_servers(exe)
+
+    def _stop_own_server_for_client(self):
+        """Joining a remote room: stop the room server this launcher started (or an orphan of an old session) and show it as off."""
+        if not self.server_process and not self._find_server_exe():
+            return
+        was_running = bool(self.server_process)
+        self._stop_server_process()
+        if was_running:
+            self._log("Te unes a la sala de otro jugador: se detuvo el servidor propio que seguía en marcha.")
+        if hasattr(self, "btn_toggle_server"):
+            self.btn_toggle_server.configure(text="▶  Iniciar Servidor de Sala (Host)", fg_color="#2f9488", hover_color="#257a70")
+        if hasattr(self, "lbl_server_status"):
+            self.lbl_server_status.configure(text="⚪ Servidor Inactivo", text_color="#9db3ba")
 
     def toggle_host_server(self):
         if self.server_process:
@@ -1993,12 +2142,20 @@ class LauncherLogic:
                 return
             self._own_address_ok.add(own)
 
+        if not self._dxc_ok_to_play():
+            return
+
         self._offer_hidhide_access()
 
         # Prepare arguments
         run_args = [tools, "run", games_dir, out_dir, "--window", "--max-imports", "1000000000000"]
         if self.config.get("fullscreen", True):
             run_args.append("--fullscreen")
+        if self.config.get("separate_save", False):
+            # a hunter of its own, so the port and Cemu on one PC do not share a saved game (nor a name)
+            sdir = save_dir_for(self.config)
+            os.makedirs(sdir, exist_ok=True)
+            run_args += ["--save-dir", sdir]
 
         # What was changed in the game's overlay the last time counts before the environment is made
         self.import_ingame_settings()
@@ -2045,6 +2202,11 @@ class LauncherLogic:
         else:
             env["WGPU_BACKEND"] = "vulkan"
 
+        # Graphics card (only when the player chose one; otherwise the engine picks the best)
+        adapter = str(self.config.get("gfx_adapter", "") or "").strip()
+        if adapter:
+            env["MH3U_GFX_ADAPTER"] = adapter
+
         # Present Mode (VSync / Mailbox)
         env["MH3U_PRESENT_MODE"] = self.config.get("present_mode", "mailbox")
 
@@ -2057,7 +2219,7 @@ class LauncherLogic:
         env["MH3U_FSR_SHARPNESS"] = str(round(float(sharpness_pct) / 100.0, 2))
 
         # The hunter's name is the one in the saved game; a new hunter types it in the game's own keyboard (the launcher does not ask for it)
-        detected_hunter = get_hunter_name_from_save(self.config.get("out_dir", DEFAULT_OUT_DIR))
+        detected_hunter = get_hunter_name_from_save(self.config.get("out_dir", DEFAULT_OUT_DIR), save_dir_for(self.config))
         if detected_hunter:
             env["MH3U_HUNTER_NAME"] = detected_hunter
 
@@ -2105,6 +2267,8 @@ class LauncherLogic:
                     if own_ip:
                         env["MH3U_LOCAL_IP"] = own_ip
                 else:
+                    # joining somebody else's room: a server of ours left running by an earlier try would keep the ports
+                    self._stop_own_server_for_client()
                     env["MH3U_ONLINE_MODE"] = "client"
                     env["MH3U_ONLINE_SERVER"] = target_server
                     my_ip = detect_route_ip(target_server)
@@ -2155,7 +2319,7 @@ class LauncherLogic:
         out_dir = self.config.get("out_dir", DEFAULT_OUT_DIR)
 
         # Detect real hunter name from save file, or fallback to config
-        saved_hunter = get_hunter_name_from_save(out_dir)
+        saved_hunter = get_hunter_name_from_save(out_dir, save_dir_for(self.config))
         hunter_name = saved_hunter or self.config.get("hunter_name", "Hunter")
 
         if self.config.get("discord_rpc", True):
@@ -2245,7 +2409,7 @@ class LauncherLogic:
 
                             # In case save was saved during play, re-check save files if name is still default
                             if not hunter_name or hunter_name == "Hunter":
-                                fresh_save_name = get_hunter_name_from_save(out_dir)
+                                fresh_save_name = get_hunter_name_from_save(out_dir, save_dir_for(self.config))
                                 if fresh_save_name:
                                     hunter_name = fresh_save_name
 
@@ -2278,8 +2442,7 @@ class LauncherLogic:
             ))
 
     def open_save_folder(self):
-        out_dir = self.config.get("out_dir", DEFAULT_OUT_DIR)
-        save_dir = os.path.join(out_dir, "save")
+        save_dir = save_dir_for(self.config)
         os.makedirs(save_dir, exist_ok=True)
         try:
             os.startfile(save_dir)
@@ -2287,8 +2450,7 @@ class LauncherLogic:
             messagebox.showerror("Error", f"No se pudo abrir la carpeta: {e}")
 
     def backup_save_folder(self):
-        out_dir = self.config.get("out_dir", DEFAULT_OUT_DIR)
-        save_dir = os.path.join(out_dir, "save")
+        save_dir = save_dir_for(self.config)
         if not os.path.exists(save_dir) or not os.listdir(save_dir):
             messagebox.showwarning("Sin partidas", "Aún no hay archivos de guardado en la carpeta.")
             return

@@ -6,6 +6,7 @@ and so on, plus message boxes and folder dialogs that can be called from any thr
 
 import threading
 
+import i18n
 import qtanim
 from PySide6.QtCore import QEasingCurve, QObject, QPointF, QRectF, QSize, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QStackedWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -96,9 +99,23 @@ def init_threading():
     _main = _MainThread()
 
 
-def _box(kind, title, text, buttons=QMessageBox.StandardButton.Ok):
+def _box(kind, title, text, buttons=QMessageBox.StandardButton.Ok, names=None):
     def show():
-        box = QMessageBox(kind, str(title), str(text), buttons)
+        box = QMessageBox(kind, i18n.t(str(title)), i18n.t(str(text)), buttons)
+        # Qt's own translations are not shipped: the standard buttons are named here, in the launcher's language
+        english = i18n.language() == "en"
+        for which, es, en in (
+            (QMessageBox.StandardButton.Yes, "Sí", "Yes"),
+            (QMessageBox.StandardButton.No, "No", "No"),
+            (QMessageBox.StandardButton.Ok, "Aceptar", "OK"),
+        ):
+            b = box.button(which)
+            if b is not None:
+                b.setText(en if english else es)
+        for which, label in (names or {}).items():  # a question whose answers have names of their own
+            b = box.button(which)
+            if b is not None:
+                b.setText(i18n.t(label))
         return box.exec()
 
     return on_main(show)
@@ -118,9 +135,42 @@ class messagebox:  # noqa: N801 - mirrors the tkinter module the logic was writt
         _box(QMessageBox.Icon.Critical, title, text)
 
     @staticmethod
-    def askyesno(title, text):
+    def askyesno(title, text, yes=None, no=None):
+        """Yes or no; `yes` / `no` give the buttons names of their own."""
         yes_no = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        return _box(QMessageBox.Icon.Question, title, text, yes_no) == QMessageBox.StandardButton.Yes
+        names = {QMessageBox.StandardButton.Yes: yes, QMessageBox.StandardButton.No: no}
+        names = {k: v for k, v in names.items() if v}
+        return _box(QMessageBox.Icon.Question, title, text, yes_no, names) == QMessageBox.StandardButton.Yes
+
+
+def license_dialog(title, intro, text, accept="Acepto y descargar", decline="Cancelar"):
+    """A window with the terms to read (scrollable) and two buttons; True only if the player accepts. Callable from any thread."""
+
+    def show():
+        dlg = QDialog()
+        title, intro, text, accept, decline = (i18n.t(str(x)) for x in (title, intro, text, accept, decline))
+        dlg.setWindowTitle(title)
+        dlg.resize(640, 520)
+        lay = QVBoxLayout(dlg)
+        lab = QLabel(str(intro))
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        box = QPlainTextEdit(str(text))
+        box.setReadOnly(True)
+        lay.addWidget(box, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        no = QPushButton(str(decline))
+        yes = QPushButton(str(accept))
+        no.clicked.connect(dlg.reject)
+        yes.clicked.connect(dlg.accept)
+        no.setDefault(True)  # Enter must not accept legal terms
+        row.addWidget(no)
+        row.addWidget(yes)
+        lay.addLayout(row)
+        return dlg.exec() == QDialog.DialogCode.Accepted
+
+    return on_main(show)
 
 
 class filedialog:  # noqa: N801
@@ -139,7 +189,8 @@ def font(size=None, bold=False, family=None, pixel=False):
 
 class Label(QLabel):
     def __init__(self, text="", color=None, size=10.5, bold=False, family=None, wrap=0, parent=None):
-        super().__init__(text, parent)
+        super().__init__(i18n.t(str(text)), parent)
+        self._src = str(text)
         self.setFont(font(size, bold, family))
         self._color = color or PARCHMENT
         self._paint_color()
@@ -150,6 +201,14 @@ class Label(QLabel):
 
     def _paint_color(self):
         self.setStyleSheet(f"color: {self._color}; background: transparent;")
+
+    def setText(self, text):
+        self._src = str(text)
+        super().setText(i18n.t(self._src))
+
+    def text(self):
+        """The text as the logic wrote it (what is shown may be a translation)."""
+        return getattr(self, "_src", super().text())
 
     def configure(self, **kw):
         if "text" in kw:
@@ -163,7 +222,7 @@ class Button(QPushButton):
     """A button painted here (so its colour can follow the mouse softly); `configure` keeps the CTk-like API of the logic."""
 
     def __init__(self, text="", kind="default", command=None, width=None, height=34, size=10.5, bold=True, parent=None):
-        super().__init__(tx(text), parent)
+        super().__init__(tx(i18n.t(str(text))), parent)
         self._fg, self._hover_c, self._tc = BUTTON_KINDS[kind]
         self._command = None
         self.glow = 0.0  # 0..1, set by qtanim.Glow on the PLAY button
@@ -231,7 +290,7 @@ class Button(QPushButton):
 
     def configure(self, **kw):
         if "text" in kw:
-            self.setText(tx(kw["text"]))
+            self.setText(tx(i18n.t(str(kw["text"]))))
             self.updateGeometry()
         if "state" in kw:
             self.setEnabled(kw["state"] != "disabled")
@@ -259,7 +318,7 @@ class Entry(QLineEdit):
     def __init__(self, placeholder="", width=None, height=34, parent=None):
         super().__init__(parent)
         self.setFont(font(10.5))
-        self.setPlaceholderText(placeholder)
+        self.setPlaceholderText(i18n.t(placeholder))
         self.setMinimumHeight(height)
         if width:
             self.setFixedWidth(width)
@@ -282,7 +341,7 @@ class _Toggle(QAbstractButton):
 
     def __init__(self, text="", command=None, switch=False, parent=None):
         super().__init__(parent)
-        self.setText(text)
+        self.setText(i18n.t(str(text)))
         self.setCheckable(True)
         self.setFont(font(10.5, bold=switch))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -383,7 +442,7 @@ class _TabButton(QAbstractButton):
 
     def __init__(self, text, size=10.5, bold=True, radius=14, parent=None):
         super().__init__(parent)
-        self.setText(text)
+        self.setText(i18n.t(str(text)))
         self.setCheckable(True)
         self.setFont(font(size, bold))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -524,7 +583,7 @@ class Segmented(PillBar):
 class OptionMenu(QComboBox):
     def __init__(self, values, width=None, parent=None):
         super().__init__(parent)
-        self.addItems(values)
+        self.set_values(values)
         self.setFont(font(10.5))
         self.setMinimumHeight(34)
         if width:
@@ -532,14 +591,19 @@ class OptionMenu(QComboBox):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def get(self):
-        return self.currentText()
+        """The chosen entry as the logic wrote it (the list shows a translation)."""
+        data = self.currentData()
+        return data if data is not None else self.currentText()
 
     def set_values(self, values):
         self.clear()
-        self.addItems(values)
+        for v in values:
+            self.addItem(i18n.t(str(v)), str(v))
 
     def set(self, text):
-        i = self.findText(text)
+        i = self.findData(text)
+        if i < 0:
+            i = self.findText(text)
         if i >= 0:
             self.setCurrentIndex(i)
 
@@ -607,7 +671,7 @@ class LogBox(QPlainTextEdit):
 
     def insert(self, where, text):
         self.moveCursor(self.textCursor().MoveOperation.End)
-        self.insertPlainText(text)
+        self.insertPlainText(i18n.t(text))
 
     def see(self, where):
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
@@ -643,7 +707,7 @@ class TabView(QWidget):
         self.bar.on_resize = self._snap_pill
 
     def add(self, name, page):
-        b = _TabButton(plain(name))
+        b = _TabButton(plain(i18n.t(name)))
         b.clicked.connect(lambda checked=False, n=name: self.set(n))
         self._bar_lay.addWidget(b)
         self.stack.addWidget(page)

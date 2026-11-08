@@ -13,6 +13,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 UPDATE_REPO = "G30vamv/MH3U-NativePC"
@@ -49,16 +51,43 @@ def parse_version(text):
     return tuple(int(n) for n in nums) if nums else (0,)
 
 
-def _open(url, timeout=20):
+ATTEMPTS = 3          # tries per request or file when GitHub hiccups (504, timeouts, dropped connections)
+RETRY_PAUSE = 2.0     # seconds before the next try (doubles each time)
+
+
+def _retryable(err):
+    """A temporary failure worth another try: server-side 5xx/429, timeouts, network drops."""
+    if isinstance(err, urllib.error.HTTPError):
+        return err.code >= 500 or err.code in (408, 429)
+    return isinstance(err, (urllib.error.URLError, OSError))
+
+
+def _with_retries(action, attempts=None):
+    attempts = attempts or ATTEMPTS
+    pause = RETRY_PAUSE
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except Exception as e:
+            if attempt >= attempts or not _retryable(e):
+                raise
+            time.sleep(pause)
+            pause *= 2
+
+
+def _open(url, timeout=30):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     return urllib.request.urlopen(req, timeout=timeout)
 
 
 def fetch_manifest():
     url = os.environ.get(MANIFEST_ENV) or MANIFEST_URL
-    try:
+    def read():
         with _open(url) as r:
-            data = json.loads(r.read().decode("utf-8"))
+            return json.loads(r.read().decode("utf-8"))
+
+    try:
+        data = _with_retries(read)
     except Exception as e:
         raise UpdateError(f"No se pudo leer el manifiesto de actualización: {e}")
     if not isinstance(data, dict) or "version" not in data or not isinstance(data.get("files"), list):
@@ -116,18 +145,25 @@ def download_files(todo, base_dir, progress=None):
         for e in todo:
             dest = os.path.join(stage, e["rel"])
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            h = hashlib.sha256()
-            with _open(e["url"], timeout=60) as r, open(dest, "wb") as out:
-                while True:
-                    chunk = r.read(1 << 18)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    h.update(chunk)
-                    done += len(chunk)
-                    if progress:
-                        progress(min(done / total, 1.0), e["rel"])
-            if h.hexdigest() != e["sha256"].lower():
+            before = done
+
+            def fetch(e=e, dest=dest):
+                nonlocal done
+                done = before  # a retry starts this file again
+                h = hashlib.sha256()
+                with _open(e["url"], timeout=60) as r, open(dest, "wb") as out:
+                    while True:
+                        chunk = r.read(1 << 18)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        h.update(chunk)
+                        done += len(chunk)
+                        if progress:
+                            progress(min(done / total, 1.0), e["rel"])
+                return h.hexdigest()
+
+            if _with_retries(fetch) != e["sha256"].lower():
                 raise UpdateError(f"Verificación sha256 fallida: {e['rel']}")
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)

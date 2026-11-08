@@ -17,6 +17,15 @@ def wait(ms):
     loop.exec()
 
 
+def settle(done, limit=3000):
+    """Waits until `done()` is true (at most `limit` ms): an animation ends when the clock says so, and a loaded machine
+    (first run, antivirus, other tests) may run the end of it later than a fixed pause guessed."""
+    waited = 0
+    while not done() and waited < limit:
+        wait(10)
+        waited += 10
+
+
 class AnimationSwitchTests(unittest.TestCase):
     def tearDown(self):
         import qtanim
@@ -48,7 +57,7 @@ class AnimationSwitchTests(unittest.TestCase):
         host.show()
         qtanim.reveal(w, 60, 18)
         self.assertIsNotNone(w.graphicsEffect())
-        wait(300)
+        settle(lambda: w.graphicsEffect() is None)
         self.assertIsNone(w.graphicsEffect())  # an effect left on would make every repaint slower
         self.assertEqual((w.x(), w.y()), (10, 20))
 
@@ -150,7 +159,7 @@ class WidgetTests(unittest.TestCase):
         tv.animate = True
         tv.set("  ⚙️ Dos  ")
         self.assertEqual(tv.current(), "⚙️ Dos")
-        wait(450)  # the pill has slid to the second tab
+        settle(lambda: abs(tv.bar.pill.left() - tv._buttons["⚙️ Dos"].geometry().left()) <= 1)  # the pill has slid to the second tab
         self.assertGreater(tv.bar.pill.left(), first)
         self.assertAlmostEqual(tv.bar.pill.left(), tv._buttons["⚙️ Dos"].geometry().left(), delta=1)
 
@@ -193,7 +202,7 @@ class WidgetTests(unittest.TestCase):
         sw.click()
         wait(40)
         self.assertTrue(0.0 < sw._knob <= 1.2)  # on its way (it may overshoot a little)
-        wait(400)
+        settle(lambda: abs(sw._knob - 1.0) <= 0.02)
         self.assertAlmostEqual(sw._knob, 1.0, delta=0.02)
         qtanim.set_user_choice(False)
         sw.click()
@@ -225,7 +234,7 @@ class SelectorAndTipTests(unittest.TestCase):
         wait(60)
         first = seg.pill.left()
         seg._buttons["Tres"].click()
-        wait(450)
+        settle(lambda: abs(seg.pill.left() - seg._buttons["Tres"].geometry().left()) <= 1)
         self.assertEqual(seg.get(), "Tres")
         self.assertEqual(picked, ["Tres"])
         self.assertGreater(seg.pill.left(), first)
@@ -284,7 +293,7 @@ class SelectorAndTipTests(unittest.TestCase):
         wait(60)
         self.assertTrue(b.isVisible())
         self.assertLess(b.maximumHeight(), 16777215)  # still unfolding
-        wait(450)
+        settle(lambda: not a.isVisible() and b.maximumHeight() == 16777215)
         self.assertFalse(a.isVisible())
         self.assertTrue(b.isVisible())
         self.assertEqual(b.maximumHeight(), 16777215)  # normal size limits are back
@@ -310,7 +319,7 @@ class SelectorAndTipTests(unittest.TestCase):
         seg._buttons["Dos"].click()
         wait(60)
         seg.move_pill(QRectF(300, 4, 90, 32), False)  # what a layout change does while the pill is moving
-        wait(450)
+        settle(lambda: abs(seg.pill.left() - 300) <= 1)
         self.assertAlmostEqual(seg.pill.left(), 300, delta=1)
 
 
@@ -333,7 +342,7 @@ class MinimizeTests(unittest.TestCase):
         qtanim.minimize_window(win)
         self.assertIsNotNone(win._minimizing, "it goes down softly, not at once")
         qtanim.minimize_window(win)  # a second click while it goes down does nothing more
-        wait(400)
+        settle(lambda: win.isMinimized() and win._minimizing is None)
         self.assertTrue(win.isMinimized())
         self.assertEqual(win.windowOpacity(), 1.0, "opaque again, so that restoring it finds it whole")
         self.assertEqual((win.pos().x(), win.pos().y()), (50, 50), "and back in its place")

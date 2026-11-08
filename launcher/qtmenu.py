@@ -4,8 +4,9 @@ from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPrope
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractButton, QFrame, QHBoxLayout, QVBoxLayout
 
+import i18n
 import qtanim
-from qtshim import PARCHMENT, Label, Switch, font
+from qtshim import PARCHMENT, Label, Segmented, Switch, font
 
 WIDTH = 330
 
@@ -15,7 +16,7 @@ class _Row(QAbstractButton):
 
     def __init__(self, text, parent=None):
         super().__init__(parent)
-        self.setText(text)
+        self.setText(i18n.t(str(text)))
         self.setFixedHeight(36)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -62,6 +63,18 @@ class SettingsMenu(QFrame):
         label = Label(text, "#9db3ba", 9.5, bold=True)
         label.setContentsMargins(14, 2, 0, 4)
         self._lay.addWidget(label)
+
+    def add_choice(self, values, current, command):
+        """A selector (a gold pill under the chosen entry) that stays in the menu; returns it."""
+        seg = Segmented(values, command, size=10)
+        seg.set(current)
+        wrap = QFrame()
+        wrap.setStyleSheet("background: transparent;")
+        h = QHBoxLayout(wrap)
+        h.setContentsMargins(10, 2, 8, 6)
+        h.addWidget(seg)
+        self._lay.addWidget(wrap)
+        return seg
 
     def add_action(self, text, command):
         row = _Row(text)

@@ -6,6 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLabel, QWidget
 
+import i18n
 import qtanim
 from qtshim import GOLD, GOLD_HOVER, PARCHMENT, font
 
@@ -83,13 +84,13 @@ class TitleBar(QWidget):
             icon.setPixmap(QIcon(icon_path).pixmap(QSize(18, 18)))
             icon.setStyleSheet("background: transparent;")
             lay.addWidget(icon)
-        label = QLabel(title)
+        label = QLabel(i18n.t(title))
         label.setFont(font(10))
         label.setStyleSheet(f"color: {PARCHMENT}; background: transparent;")
         lay.addWidget(label)
         lay.addStretch(1)
         self.btn_menu = _CaptionButton("gear")  # opens the launcher's menu (see qtmenu)
-        self.btn_menu.setToolTip("Menú del launcher: instalación, gráficos, controles, online, partidas y más")
+        self.btn_menu.setToolTip(i18n.t("Menú del launcher: instalación, gráficos, controles, online, partidas y más"))
         lay.addWidget(self.btn_menu)
         self.btn_min = _CaptionButton("min")
         self.btn_max = _CaptionButton("max")

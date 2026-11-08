@@ -2,9 +2,27 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). While the project is below 1.0, every release raises the last number of the version (`0.MINOR.PATCH`), whether it brings fixes or new things; see "Versions and releases" in the [README](README.md). A published version is never replaced: a fix comes as a new version.
 
-Every entry is also published as the notes of its [GitHub Release](../../releases). The interface of the launcher is still in Spanish; a full English translation is planned.
+Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
 ## [Unreleased]
+
+## [0.9.14] - 2026-11-08
+
+### Added
+- **The launcher in English.** Every text of the launcher (menus, tabs, tips, messages, the log of the build window) and the guides come in English and Spanish. The language follows Windows' on its own (English if Windows is in neither language) and can be changed in the new **Language** selector of the gear menu; the launcher offers to restart to apply it. The game's own panels (F1 / F2, the keyboard window, the life and damage panels) use the same language, so there is one setting for everything; the monsters' names stay as they are. New guides: `README.txt` and `MULTIPLAYER_INSTRUCTIONS.txt`.
+- **Choose the graphics card.** The Graphics tab has a "Graphics card" list (Automatic by default) so a PC with an integrated and a dedicated card, or a hybrid laptop, can pick which one draws the game. If the chosen card is not found the game uses the automatic choice.
+- **DirectX 12 helper download.** With DirectX 12 selected, a button downloads Microsoft's shader compiler (two DLLs) so the game prepares its shaders in seconds instead of tens of seconds. You read and accept Microsoft's license terms in a window first; the button only shows with DirectX 12 and disappears once installed.
+- **Time on every line of the game's log**, to match it with the room server's log when something goes wrong online.
+- **Saved games apart (Online tab).** An option to keep this launcher's saved games in a folder of their own, so the port and Cemu on the same PC can have hunters with different names and not clash in a room. Your usual saved game is not touched.
+
+### Changed
+- **The language selector moved** from the Graphics tab to the gear menu and now sets the language of the launcher and of the game together.
+- **The equipment and item box screens run smoother.** Their many small graphics jobs are now handed to the graphics card together: about 7 % more frames on an integrated Radeon, fewer sudden stutters and about 1.7 GB less memory at its peak.
+
+### Fixed
+- **Updates retry on their own** when GitHub answers "504 Gateway Time-out" or the connection drops, instead of failing the first time.
+- **A heads-up before playing with DirectX 12 without Microsoft's helper files.** On some graphics cards the game draws wrongly (black shadows and objects) without them; the launcher now says so once and offers to install them (you read and accept Microsoft's terms first), or lets you carry on.
+- **Joining a friend's room now stops a room server of yours** that was still running from an earlier try.
 
 ## [0.9.13] - 2026-11-08
 

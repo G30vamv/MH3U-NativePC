@@ -33,7 +33,7 @@ Compared with the original port, MH3U NativePC adds:
 - **A clear message instead of a frozen picture** if the graphics card stops answering, and smaller buffers on cards with little memory.
 - **A launcher that does the setup:** finds your dump, downloads a portable Clang on demand, builds the game for your CPU, and updates itself (see [How updates work](#how-updates-work)).
 
-The launcher is currently in Spanish; a full English translation is planned.
+The launcher and the in-game panels (F1 / F2) come in English and Spanish: the language follows Windows (English if it is neither) and can be changed with the gear button in the launcher's title bar.
 
 ### Frames per second
 

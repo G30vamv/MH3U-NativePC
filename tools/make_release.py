@@ -30,6 +30,8 @@ UPDATE_FILES = [
     "ABRIR_FIREWALL_ONLINE.bat",
     "LEEME.txt",
     "INSTRUCCIONES_MULTIJUGADOR.txt",
+    "README.txt",
+    "MULTIPLAYER_INSTRUCTIONS.txt",
     "WUA_EXTRACTION_GUIDE.txt",
     "LICENSE.txt",
     "SOURCE.txt",

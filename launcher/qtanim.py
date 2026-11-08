@@ -298,7 +298,9 @@ def tip_html(text):
     """Wraps a tooltip's text so Qt lays it out as a block of readable width (plain tooltips do not wrap)."""
     import html
 
-    body = html.escape(str(text)).replace("\n", "<br>")
+    import i18n
+
+    body = html.escape(i18n.t(str(text))).replace("\n", "<br>")
     return f'<table width="360"><tr><td>{body}</td></tr></table>'
 
 

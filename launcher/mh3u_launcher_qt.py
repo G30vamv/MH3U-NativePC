@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import i18n
 import qtanim
 import qtmenu
 import qtshim
@@ -37,8 +38,11 @@ from core import (
     DEFAULT_OUT_DIR,
     LauncherLogic,
     get_assets_dir,
+    get_base_dir,
     gpu_thread_mode,
     get_local_ip_addresses,
+    list_graphics_cards,
+    dxc_installer,
     updater,
 )
 import qtglass
@@ -185,6 +189,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.qapp = qapp
         self.assets_dir = get_assets_dir()
         self.config = self.load_config()
+        i18n.set_language(self.language())  # before any text is made: the window is built in the chosen language
         qtanim.set_user_choice(self.config.get("animations", True))
         self.is_compiling = False
         self.is_running = False
@@ -257,10 +262,30 @@ class MH3ULauncherApp(LauncherLogic):
             self.chk_fps.select()
         else:
             self.chk_fps.deselect()
-        self.opt_ui_language.set({"es": "Español", "en": "English"}.get(c.get("ui_language", "auto"), "Automático"))
+        self.seg_language.set({"es": "Español", "en": "English"}.get(c.get("ui_language", "auto"), "Automático"))
         stick = int(c.get("right_stick_sens", 100))
         self.slider_stick.set(stick)
         self.lbl_stick_val.configure(text=f"{stick}%")
+
+    def refresh_dxc_button(self):
+        """Shown only with DirectX 12 chosen and the helper not installed yet."""
+        show = self.config.get("gfx_backend", "vulkan") == "dx12" and not (dxc_installer and dxc_installer.installed(get_base_dir()))
+        self.btn_install_dxc.setVisible(bool(show and dxc_installer))
+        self.btn_install_dxc.configure(state="normal")
+
+    def _load_graphics_cards(self):
+        """The cards are asked of Windows in the background (about a second) and then put in the list."""
+        self.ui_queue.put(("gpu_list", list_graphics_cards()))
+
+    def _fill_graphics_cards(self, cards):
+        saved = str(self.config.get("gfx_adapter", "") or "")
+        names = list(cards)
+        if saved and saved not in names:
+            names.append(saved)  # a card that is not there now stays chosen
+        self.opt_adapter.blockSignals(True)
+        self.opt_adapter.set_values(["Automática (la mejor)"] + names)
+        self.opt_adapter.set(saved or "Automática (la mejor)")
+        self.opt_adapter.blockSignals(False)
 
     def on_acrylic_toggled(self):
         self.config["acrylic"] = bool(self.chk_acrylic.get())
@@ -289,6 +314,10 @@ class MH3ULauncherApp(LauncherLogic):
                     self.btn_compile_action.configure(**data)
                 elif kind == "btn_download":
                     self.btn_download_toolchain.configure(**data)
+                elif kind == "gpu_list":
+                    self._fill_graphics_cards(data)
+                elif kind == "dxc_button":
+                    self.refresh_dxc_button()
                 elif kind == "tab":
                     self.tabview.set(data)
                 elif kind == "refresh":
@@ -360,6 +389,13 @@ class MH3ULauncherApp(LauncherLogic):
             gear.update()
 
         self.menu.on_hidden = closed
+        self.menu.add_title("IDIOMA / LANGUAGE")
+        self.seg_language = self.menu.add_choice(
+            ["Automático", "Español", "English"],
+            {"es": "Español", "en": "English"}.get(self.config.get("ui_language", "auto"), "Automático"),
+            self.on_ui_language_changed,
+        )
+        self.menu.add_separator()
         self.menu.add_title("OPCIONES DEL LAUNCHER")
         self.sw_animations = self.menu.add_switch(
             "💡 Animaciones",
@@ -700,6 +736,30 @@ class MH3ULauncherApp(LauncherLogic):
         self.opt_backend.set("DirectX 12 (DX12)" if self.config.get("gfx_backend", "vulkan") == "dx12" else "Vulkan (Recomendado)")
         g.addWidget(self.opt_backend)
         _tip(lbl_backend, "Usa DirectX 12 si tienes gráfica integrada Intel o notas tirones con Vulkan.", self.opt_backend)
+        # only DirectX 12 gains from Microsoft's shader compiler, so its button shows up there and nowhere else
+        self.btn_install_dxc = Button("⬇ Instalar ayuda de DirectX 12 (Microsoft)", "default", self.start_install_dxc, height=34)
+        _tip(
+            self.btn_install_dxc,
+            "Descarga dos archivos de Microsoft (dxcompiler.dll y dxil.dll) para que DirectX 12 prepare los shaders en segundos en vez de "
+            "decenas de segundos. Antes verás sus condiciones de licencia y tendrás que aceptarlas.",
+        )
+        g.addWidget(self.btn_install_dxc, 0, Qt.AlignmentFlag.AlignLeft)
+        self.refresh_dxc_button()
+
+        lbl_card = Label("Tarjeta gráfica:", None, 10.5, bold=True)
+        g.addWidget(lbl_card)
+        saved_card = str(self.config.get("gfx_adapter", "") or "")
+        self.opt_adapter = OptionMenu(["Automática (la mejor)"] + ([saved_card] if saved_card else []))
+        self.opt_adapter.set(saved_card or "Automática (la mejor)")
+        self.opt_adapter.currentTextChanged.connect(lambda _text: self.on_adapter_changed(self.opt_adapter.get()))
+        g.addWidget(self.opt_adapter)
+        _tip(
+            lbl_card,
+            "Con una gráfica integrada y otra dedicada (o en portátiles) puedes elegir con cuál se dibuja el juego. "
+            "Automática elige la más potente. Si la elegida no se encuentra, se usa la automática.",
+            self.opt_adapter,
+        )
+        threading.Thread(target=self._load_graphics_cards, daemon=True).start()
 
         lbl_vsync = Label("Sincronización Vertical (VSync):", None, 10.5, bold=True)
         g.addWidget(lbl_vsync)
@@ -734,13 +794,6 @@ class MH3ULauncherApp(LauncherLogic):
         self.slider_sharpness.set(raw_sharp)
         sl.addWidget(self.slider_sharpness)
         g.addWidget(sharp)
-
-        lbl_lang = Label("Idioma del panel del juego (F1):", None, 10.5, bold=True)
-        g.addWidget(lbl_lang)
-        self.opt_ui_language = Segmented(["Automático", "Español", "English"], self.on_ui_language_changed)
-        self.opt_ui_language.set({"es": "Español", "en": "English"}.get(self.config.get("ui_language", "auto"), "Automático"))
-        g.addWidget(self.opt_ui_language)
-        _tip(lbl_lang, "Idioma de los ajustes y del teclado dentro del juego. «Automático» sigue el idioma de Windows.", self.opt_ui_language)
 
         g.addWidget(Label("Audio & Efectos", None, 10.5, bold=True))
         self.chk_audio = CheckBox("Sonido Activado (CPAL WASAPI)", self.save_settings_from_ui)
@@ -964,6 +1017,15 @@ class MH3ULauncherApp(LauncherLogic):
         self.seg_online_mode = Segmented(["🎮 Unirme a la sala de un amigo (Cliente)", "👑 Crear mi sala (Host)"], self.on_online_mode_changed, bold=True)
         self.seg_online_mode.set(init_mode)
         tl.addWidget(self.seg_online_mode)
+        self.chk_separate_save = CheckBox("Partidas guardadas aparte (para jugar junto a Cemu en este mismo PC)", self.on_separate_save_toggled)
+        if self.config.get("separate_save", False):
+            self.chk_separate_save.select()
+        tl.addWidget(self.chk_separate_save)
+        _tip(
+            self.chk_separate_save,
+            "Usa una carpeta de partidas propia (partidas_aparte, junto al launcher) en vez de la normal. Así el puerto y Cemu en el mismo PC "
+            "pueden tener cazadores con nombres distintos y no chocan en la sala. Empiezas con un cazador nuevo; la partida de siempre no se toca.",
+        )
         diag_row = QHBoxLayout()
         btn_diag = Button("🩺 Diagnóstico de Red", "default", self.run_diagnostics, width=190)
         _tip(btn_diag, "Revisa el firewall, tu IP y la conexión con tu amigo. Lo que escribas aquí se guarda solo al pulsar JUGAR.")

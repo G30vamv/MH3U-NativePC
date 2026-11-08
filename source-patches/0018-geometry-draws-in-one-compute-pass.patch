@@ -1,0 +1,168 @@
+diff --git a/crates/mh3u-gfx/src/draw.rs b/crates/mh3u-gfx/src/draw.rs
+index 2e0406e..671d10b 100644
+--- a/crates/mh3u-gfx/src/draw.rs
++++ b/crates/mh3u-gfx/src/draw.rs
+@@ -2979,7 +2979,7 @@ impl Gx2 {
+     }
+ 
+     /// The same, with which arena of the role it is in (none for a buffer too big to share).
+-    fn arena_place(&mut self, role: Role, size: u64) -> (BufRef, Option<usize>) {
++    pub(crate) fn arena_place(&mut self, role: Role, size: u64) -> (BufRef, Option<usize>) {
+         let limits = self.d.device.limits();
+         let align = u64::from(
+             limits
+@@ -3088,6 +3088,8 @@ impl Gx2 {
+         self.batch.generation += 1;
+         self.batch.slots_used = 0;
+         lap.mark("arena uploads");
++        self.encode_geo_jobs();
++        lap.mark("geometry compute pass");
+         // wgpu 30 records a pass's commands when the pass ends but checks them, tracks the resources and makes the backend's (Vulkan's
+         // or D3D12's) commands only in `finish`: the batch's draws cost most of their GPU-side CPU time there, so the queue's thread does
+         // the finishing and the submit, after the writes above
+@@ -3454,6 +3456,8 @@ pub(crate) struct Batch {
+     key: Option<PassKey>,
+     /// The compute work of the geometry pipelines, which comes before the draws that read what it makes.
+     pub(crate) pre: Option<wgpu::CommandEncoder>,
++    /// The geometry draws of this batch whose compute work is not recorded yet (see `GeoJob`).
++    pub(crate) geo_jobs: Vec<crate::geometry::GeoJob>,
+     arenas: [Vec<Arena>; 3],
+     /// Counts the batches handed to the GPU (what was uploaded in an earlier one is not where it was any more).
+     pub(crate) generation: u64,
+@@ -3465,6 +3469,17 @@ pub(crate) struct Batch {
+     geometry_draws: u32,
+ }
+ 
++impl Batch {
++    /// The arenas of a role that this batch has cut parts from, with how much of each (rounded up for a clear).
++    pub(crate) fn arena_used(&self, role: Role) -> Vec<(wgpu::Buffer, u64)> {
++        self.arenas[role as usize]
++            .iter()
++            .filter(|a| a.used > 0)
++            .map(|a| (a.buffer.clone(), a.used.next_multiple_of(4)))
++            .collect()
++    }
++}
++
+ /// A big buffer that the small buffers of a batch of draws are cut from (one allocation instead of several per draw). Its parts are not
+ /// used again until the batch has been handed to the GPU, whose queue keeps the order of the writes and the commands.
+ struct Arena {
+diff --git a/crates/mh3u-gfx/src/geometry.rs b/crates/mh3u-gfx/src/geometry.rs
+index d4da8dc..a4a72a6 100644
+--- a/crates/mh3u-gfx/src/geometry.rs
++++ b/crates/mh3u-gfx/src/geometry.rs
+@@ -11,6 +11,26 @@ use mh3u_latte::translate::{Context, RingConfig, TexKind, VertexInputs, translat
+ use mh3u_rt::Guest;
+ use std::sync::Arc;
+ 
++/// The compute work of one geometry draw, kept until the batch is handed to the GPU: the work of all the draws of a batch is then
++/// recorded in one compute pass after one clear of what they write, instead of two passes and two clears for each draw (on an
++/// integrated GPU the equipment screens, with some 300 of these draws in a row, spent more time on that than on drawing).
++pub(crate) struct GeoJob {
++    es_pipeline: wgpu::ComputePipeline,
++    gs_pipeline: wgpu::ComputePipeline,
++    es_groups: [wgpu::BindGroup; 2],
++    gs_groups: [wgpu::BindGroup; 2],
++    es_workgroups: u32,
++    gs_workgroups: u32,
++    /// Buffers of their own (too big for the arenas) that must read as zero before the work.
++    clear: Vec<BufRef>,
++}
++
++/// Whether the work of a batch's geometry draws is grouped (`MH3U_GFX_GS_GROUP=off` goes back to a pass pair for each draw).
++fn grouped() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| !std::env::var("MH3U_GFX_GS_GROUP").is_ok_and(|v| v.eq_ignore_ascii_case("off")))
++}
++
+ /// What the render stage of a geometry pipeline draws from.
+ pub struct GeoOut {
+     pub copy: Arc<Compiled>,
+@@ -100,9 +120,9 @@ impl Gx2 {
+         let (va, meta_buffer) = (streams.data, streams.meta);
+         let ring_in = self.arena_alloc(Role::RingIn, u64::from(total) * u64::from(es_vec4) * 16);
+         // what the geometry shader does not write must read as zero (an empty triangle)
+-        let ring_out = self.arena_alloc(Role::Out, u64::from(count) * u64::from(max_vertices) * u64::from(gs_vec4) * 16);
++        let (ring_out, ring_out_in) = self.arena_place(Role::Out, u64::from(count) * u64::from(max_vertices) * u64::from(gs_vec4) * 16);
+         let index_count = count * max_vertices * 3;
+-        let indices = self.arena_alloc(Role::Out, u64::from(index_count) * 4);
++        let (indices, indices_in) = self.arena_place(Role::Out, u64::from(index_count) * 4);
+         let es_params = self.arena_write(&[total.to_le_bytes(), 0u32.to_le_bytes(), [0; 4], [0; 4]].concat(), 16);
+         let gs_params = self.arena_write(&[count.to_le_bytes(), first.to_le_bytes(), [0; 4], [0; 4]].concat(), 16);
+         // uniform blocks of each stage, and the bind groups (kept, like a draw's)
+@@ -142,6 +162,30 @@ impl Gx2 {
+             ],
+             true,
+         );
++        if grouped() {
++            let mut clear = Vec::new();
++            for (r, arena) in [(&ring_out, ring_out_in), (&indices, indices_in)] {
++                if arena.is_none() {
++                    clear.push(r.clone());
++                }
++            }
++            self.batch.geo_jobs.push(GeoJob {
++                es_pipeline: es_pipeline.clone(),
++                gs_pipeline: gs_pipeline.clone(),
++                es_groups: [es_g0, es_g1],
++                gs_groups: [gs_g0, gs_g1],
++                es_workgroups: total.div_ceil(64),
++                gs_workgroups: count.div_ceil(64),
++                clear,
++            });
++            return Some(GeoOut {
++                copy,
++                ring_out,
++                indices,
++                index_count,
++                semantics_at: gs + 0x20,
++            });
++        }
+         let device = self.d.device.clone();
+         let enc = self
+             .batch
+@@ -178,6 +222,44 @@ impl Gx2 {
+         })
+     }
+ 
++    /// Records the compute work of the batch's geometry draws: one clear of the parts of the arenas they write (what the geometry
++    /// shader does not write must read as zero, an empty triangle), then one compute pass with the vertex and geometry stage of each
++    /// draw in turn.
++    pub(crate) fn encode_geo_jobs(&mut self) {
++        if self.batch.geo_jobs.is_empty() {
++            return;
++        }
++        let jobs = std::mem::take(&mut self.batch.geo_jobs);
++        let device = self.d.device.clone();
++        let outs: Vec<(wgpu::Buffer, u64)> = self.batch.arena_used(Role::Out);
++        let enc = self
++            .batch
++            .pre
++            .get_or_insert_with(|| device.create_command_encoder(&Default::default()));
++        for (buffer, used) in &outs {
++            enc.clear_buffer(buffer, 0, Some(*used));
++        }
++        for job in &jobs {
++            for r in &job.clear {
++                enc.clear_buffer(&r.buffer, r.offset, Some(r.size));
++            }
++        }
++        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
++            label: Some("geometry"),
++            timestamp_writes: None,
++        });
++        for job in &jobs {
++            pass.set_pipeline(&job.es_pipeline);
++            pass.set_bind_group(0, &job.es_groups[0], &[]);
++            pass.set_bind_group(1, &job.es_groups[1], &[]);
++            pass.dispatch_workgroups(job.es_workgroups, 1, 1);
++            pass.set_pipeline(&job.gs_pipeline);
++            pass.set_bind_group(0, &job.gs_groups[0], &[]);
++            pass.set_bind_group(1, &job.gs_groups[1], &[]);
++            pass.dispatch_workgroups(job.gs_workgroups, 1, 1);
++        }
++    }
++
+     /// The geometry pipeline from its program bytes: translated once for each set of programs and inputs. None while it is made on a
+     /// worker (with `MH3U_GFX_ASYNC_DECODE` on, a new one always is: translating it and making its two compute pipelines took 36 ms
+     /// on the render thread in runs 19 and 20); Some(None) when it cannot be made.
