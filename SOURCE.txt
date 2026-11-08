@@ -5,11 +5,11 @@ Este paquete se distribuye bajo la GNU Affero General Public License v3.0
 (ver LICENSE.txt). Codigo fuente correspondiente de cada componente:
 
 1) Launcher (MH3U.exe) + herramientas de release + parches de abajo
-   https://github.com/G30vamv/Mh3u-native-port-launcher-and-online-integration
+   https://github.com/G30vamv/MH3U-NativePC
 
 2) mh3u-tools.exe  (port nativo de glinesbdev/mh3u-port, con modificaciones)
    Original : https://github.com/glinesbdev/mh3u-port  (commit base 41d3a9b)
-   Cambios  : carpeta source-patches/ del repositorio (1), parches 0001 a 0013,
+   Cambios  : carpeta source-patches/ del repositorio (1), parches 0001 a 0016,
               con instrucciones para reproducir el binario.
    Incluye el escalado AMD FidelityFX Super Resolution 1.0 (EASU + RCAS, licencia MIT,
               Copyright (c) 2021 Advanced Micro Devices, Inc.; aviso completo en THIRD_PARTY.md del repositorio (1)).
@@ -17,7 +17,7 @@ Este paquete se distribuye bajo la GNU Affero General Public License v3.0
 3) server.exe  (mh3u-revival de Matt-Wood-23, SIN modificar, version v0.2.0-beta)
    https://github.com/Matt-Wood-23/mh3u-revival/tree/v0.2.0-beta
 
-4) mods/hooks.txt  (de glinesbdev/mh3u-port, sin modificar)
+4) mods/hooks.txt  (lista de ganchos de los trucos y los mods del proyecto; propia, ver parche 0016)
 
 5) libunwind.dll  (LLVM, Apache-2.0 con excepcion LLVM)
    https://github.com/llvm/llvm-project
