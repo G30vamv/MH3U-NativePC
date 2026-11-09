@@ -1,5 +1,5 @@
 ﻿============================================================
-  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.14)
+  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.15)
   Launcher desarrollado por: g30wolff99
 ============================================================
 
@@ -11,7 +11,7 @@ Este paquete es 100% PORTABLE y AUTÓNOMO (funciona directamente al descomprimir
 - Interfaz de cristal con resumen en vivo de tus ajustes; efecto Acrylic opcional (solo Windows 11).
 - Soporte para optimización inter-archivos ThinLTO (-flto=thin + -O3).
 - Motor nativo 'mh3u-tools.exe' optimizado con contador de FPS e interfaz fluida.
-- Launcher gráfico oficial v0.9.14 con registro en tiempo real escroleable.
+- Launcher gráfico oficial v0.9.15 con registro en tiempo real escroleable.
 - El launcher y los paneles del juego (F1 / F2) vienen en español e inglés: el idioma sigue el de Windows
   (inglés si no es ninguno de los dos) y se cambia con el engranaje de la barra de título.
   (English version of this file: README.txt)
@@ -36,8 +36,8 @@ PASOS RÁPIDOS PARA JUGAR (SOLO LA PRIMERA VEZ):
 4. En "🎨 Configuración Gráfica":
    - Puedes configurar resolución nativa (1x, 2x 1440p, 4K),
      el escalador AMD FSR 1.0 o AMD CAS, y el nivel de nitidez.
-   - La pestaña "Controles y Mandos" tiene la disposición del mando y la sensibilidad de cámara
-     (el mapeado de botones llegará en una próxima versión).
+   - La pestaña "Controles y Mandos" tiene el remapeador de botones (elige una acción y pulsa en tu
+     mando el botón que quieres usar), la disposición del mando y la sensibilidad de cámara.
    - Dentro del juego, F2 abre unos ajustes rápidos (resolución, reescalado, nitidez, VSync,
      contador de FPS, sensibilidad de cámara e idioma); F1 abre el panel completo. El botón B del mando los cierra.
 5. ¡Listo! Pulsa en "🎮 JUGAR".

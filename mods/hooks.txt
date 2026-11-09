@@ -13,3 +13,6 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an 
 0x02129ef4 hit_resolve           # f_02129ef4: resolves ONE hit; r5 = the hit record: byte +6 = attacker kind (0 hunter, 1 monster), float +0x44 = base damage
 0x0259fc98 monster_init           # f_0259fc98(monster, ..): sets a monster's life at spawn (uEnemy::initMaxHp); r3 = the monster, whose state *(r3+0x1be0) holds hp_vital (+0x8b8) and max_hp_vital (+0x8bc). The life bars and the damage meter follow the monsters from here
 0x0285f530 sharp_change          # f_0285f530(hunter, change, flag): adds `change` to the weapon's sharpness (negative = it wears)
+
+# Bowgun aim (always on): f_028a19b8(hunter) is the per-frame update of a ranged weapon's aim; the hook moves the target pitch from the pad.
+0x028a19b8 aim_pitch          # r3 = hunter
