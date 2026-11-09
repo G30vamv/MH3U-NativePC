@@ -1,0 +1,740 @@
+diff --git a/crates/mh3u-rt/src/cafe.rs b/crates/mh3u-rt/src/cafe.rs
+index 5d44338..7da6c41 100644
+--- a/crates/mh3u-rt/src/cafe.rs
++++ b/crates/mh3u-rt/src/cafe.rs
+@@ -384,7 +384,9 @@ fn simple(name: &str) -> Option<SimpleHandler> {
+             g.put_u32(buffer, hold);
+             g.put_u32(buffer + 4, os.pad_edges.0);
+             g.put_u32(buffer + 8, os.pad_edges.1);
+-            let sticks = input.sticks();
++            let mut sticks = input.sticks();
++            sticks[3] = crate::input::pulse_vertical(sticks[3]);
++            crate::combat::probe_aim(g, sticks);
+             for (i, v) in sticks.iter().enumerate() {
+                 g.put_u32(buffer + 0xc + 4 * i as u32, v.to_bits());
+             }
+diff --git a/crates/mh3u-rt/src/combat.rs b/crates/mh3u-rt/src/combat.rs
+index f64bc9c..6f2631f 100644
+--- a/crates/mh3u-rt/src/combat.rs
++++ b/crates/mh3u-rt/src/combat.rs
+@@ -607,3 +607,88 @@ mod tests {
+         with_state(|s| s.monsters.clear());
+     }
+ }
++
++/// `sAppPad`'s instance pointer (the game's pad as the rest of it reads it).
++const APPPAD_SINGLETON: u32 = 0x1031_2bb0;
++/// `sPad`'s instance pointer; `+0x38` and `+0x3c` hold the main loop's counters at the last pad update and `+0x40` how far they moved
++/// (what the game's key repeat counts with).
++const PAD_SINGLETON: u32 = 0x102c_ea34;
++
++/// A diagnostic for the bowgun's aim: while the right stick is pushed, two lines a second say what the game holds about the local
++/// hunter's controls (`*(hunter + 0xe30)`: its state, whether it stands on the ground, the pad words it works from) and about the pad
++/// (`sAppPad`: the stick as angle and length). Nothing is written to the game. At most 400 lines in a run.
++pub fn probe_aim(g: &Guest, sticks: [f32; 4]) {
++    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
++    static LINES: AtomicU32 = AtomicU32::new(0);
++    if (sticks[2].hypot(sticks[3]) < 0.3 && sticks[0].hypot(sticks[1]) < 0.3) || LINES.load(Relaxed) >= 400 {
++        return;
++    }
++    {
++        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
++        let now = std::time::Instant::now();
++        if last.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(500)) {
++            return;
++        }
++        *last = Some(now);
++    }
++    let Some(number) = local_slot(g) else { return };
++    let hunter = g.u32(g.u32(PLAYER_SINGLETON) + 0x40 + 4 * u32::from(number));
++    let ctrl = g.u32(hunter + 0xe30);
++    let app = g.u32(APPPAD_SINGLETON);
++    let game = g.u32(GAME_SINGLETON);
++    if ctrl == 0 || app == 0 {
++        return;
++    }
++    LINES.fetch_add(1, Relaxed);
++    let words = |at: u32, n: u32| (0..n).map(|i| format!("{:04x}", g.u16(at + 2 * i))).collect::<Vec<_>>().join(" ");
++    eprintln!(
++        "[aim probe] right stick ({:.2}, {:.2}) left stick ({:.2}, {:.2}); hunter {number}: state {} land {} +58 {} +e00 {} item-window {} \
++         pad words {} | ctrl 1ac-1c2 {} | hunter angles pitch {:04x} yaw {:04x} | app 134-13e {} 144 angle {:04x} {:04x} length {} {} | button config (slot:action/held) {} | action group {} id {:#x} flags bae/baf/bb0 {}{}{} staging {:08x} {:08x} | camera gate: sGame+4e {} +48 {} +3c4 {} ctrl+9ab {} +5e8 {:08x} status[2400..240a] {} | commands now {:08x} before {:08x} | aim target pitch {:04x} pitch {:04x} input {} | spad counters {} {} step {}",
++        sticks[2],
++        sticks[3],
++        sticks[0],
++        sticks[1],
++        g.u8(ctrl + 2),
++        g.u8(ctrl + 0x3d),
++        g.u8(ctrl + 0x58),
++        g.u8(ctrl + 0xe00),
++        g.u8(ctrl + 0x1542),
++        words(ctrl + 0x19c, 6),
++        words(ctrl + 0x1ac, 12),
++        g.u32(ctrl + 0x11c) & 0xffff,
++        g.u32(ctrl + 0x120) & 0xffff,
++        words(app + 0x134, 6),
++        g.u16(app + 0x144),
++        g.u16(app + 0x146),
++        g.u32(app + 0x148),
++        g.u32(app + 0x14c),
++        (0..0x24u32)
++            .filter_map(|i| {
++                let (action, held) = (g.u16(ctrl + 0x4d8 + 4 * i), g.u16(ctrl + 0x4da + 4 * i) as i16);
++                (action != 0 || held != 0).then(|| format!("{i:x}:{action:x}/{held}"))
++            })
++            .collect::<Vec<_>>()
++            .join(" "),
++        g.u8(ctrl + 0x3e),
++        g.u16(ctrl + 0x40),
++        g.u8(ctrl + 0xbae),
++        g.u8(ctrl + 0xbaf),
++        g.u8(ctrl + 0xbb0),
++        g.u32(ctrl + 0x1c8),
++        g.u32(ctrl + 0x1cc),
++        g.u8(game + 0x4e),
++        g.u8(game + 0x48),
++        g.u32(game + 0x3c4),
++        g.u8(ctrl + 0x9ab),
++        g.u32(ctrl + 0x5e8),
++        (0..11).map(|i| format!("{:x}", g.u8(hunter + 0x2400 + i))).collect::<String>(),
++        g.u32(ctrl + 0x1d0),
++        g.u32(ctrl + 0x1f0),
++        g.u32(ctrl + 0x184) & 0xffff,
++        g.u16(ctrl + 0x188),
++        g.u16(ctrl + 0xe80) as i16,
++        g.u32(g.u32(PAD_SINGLETON) + 0x38),
++        g.u32(g.u32(PAD_SINGLETON) + 0x3c),
++        g.u32(g.u32(PAD_SINGLETON) + 0x40)
++    );
++}
+diff --git a/crates/mh3u-rt/src/input.rs b/crates/mh3u-rt/src/input.rs
+index f8e07ab..8f73769 100644
+--- a/crates/mh3u-rt/src/input.rs
++++ b/crates/mh3u-rt/src/input.rs
+@@ -146,45 +146,166 @@ pub fn set_right_stick_gain(gain: f32) {
+ /// The right stick counts as pushed past this length (the keyboard and the mouse take over below it).
+ const RIGHT_STICK_DEAD: f32 = 0.05;
+ 
+-/// The right stick with the player's sensitivity: its length times `gain` (at most 1) and the same direction. The game turns the
+-/// stick into an angle and a length and only counts a direction when the angle falls in a sector (the camera's up and down in one
+-/// of 60 degrees around straight up and down, left and right in ones of 120) and the length is at least about 0.37, so what is
+-/// scaled must keep the angle: scaling and limiting each axis on its own bent a push towards the diagonal (an up that turned into
+-/// a left or a right) and, with a low sensitivity, took the small axis under a dead zone of its own.
++/// What the game needs to see of the right stick, whatever the player's sensitivity. Found in the user's logs (a camera that stopped
++/// going up and down at exactly 50 % and came back at 51 %) and in the game's pad code (`sPad::DRCPad::vf8`, `FUN_02869bb8`):
++/// - an axis counts as pushed (the camera's up and down, the aim) only past 0x4000 of 32767, which is 0.5, on its own;
++/// - the camera's sides need the stick's length to reach about 0.37 (12000 of 32767).
++/// The game takes no speed from the length (the camera's turn comes from a counter that runs while the direction is held), so these
++/// thresholds are all a smaller value could do: a sensitivity that took a push that crosses them under them (below 50 %) switched
++/// the direction off instead of making it gentler.
++const GAME_AXIS_PUSHED: f32 = 0.5;
++const GAME_AXIS_SAFE: f32 = 0.52;
++const GAME_LENGTH_COUNTED: f32 = 0.37;
++const GAME_LENGTH_SAFE: f32 = 0.4;
++
++/// The right stick with the player's sensitivity: its length times `gain` (at most 1) and the same direction, but never under what
++/// the game needs to count a push that it would have counted without the sensitivity (see above).
+ fn scale_right_stick(x: f32, y: f32, gain: f32) -> (f32, f32) {
+     let length = x.hypot(y);
+     if length <= RIGHT_STICK_DEAD {
+         return (0.0, 0.0);
+     }
+-    let scaled = (length * gain).min(1.0);
+-    (x * scaled / length, y * scaled / length)
++    let mut scaled = (length * gain).min(1.0);
++    if length > GAME_LENGTH_COUNTED {
++        scaled = scaled.max(GAME_LENGTH_SAFE);
++    }
++    let (sx, sy) = (x * scaled / length, y * scaled / length);
++    // an axis past the game's mark as the pad gives it stays past it (the other axis only follows the sensitivity)
++    let keep = |pushed: f32, s: f32| if pushed.abs() > GAME_AXIS_PUSHED && s.abs() < GAME_AXIS_SAFE { GAME_AXIS_SAFE.copysign(pushed) } else { s };
++    (keep(x, sx), keep(y, sy))
+ }
+ 
+-/// With `MH3U_TRACE_STICK` set: the right stick as pushed and as scaled for the game, a few times a second (to see what a
+-/// sensitivity does to the camera or the aim).
+-fn log_right_stick(pushed: (f32, f32), scaled: (f32, f32)) {
+-    static LAST: AtomicU32 = AtomicU32::new(0);
+-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+-    if !*ON.get_or_init(|| std::env::var_os("MH3U_TRACE_STICK").is_some()) || pushed.0.hypot(pushed.1) <= RIGHT_STICK_DEAD {
+-        return;
++/// A held right stick, up or down, as presses the game can count (experimental; `MH3U_STICK_TURBO=off` turns it off). On the user's pad it made the normal camera
++/// feel less like a button (more like stumbles, but better); it did not make the bowgun's aim go up or down.
++///
++/// The game's camera and its aim go up and down in steps that each need a press of the stick's up or down (a trigger, or the repeat
++/// the game makes itself of a held one), while sideways they follow the held direction. With a pad on this port a held up or down
++/// moved the camera or the aim by one step and then stopped (the pad reached the game, the log showed the up and down bits). So a
++/// stick held past the game's mark of 0.5 up or down is let go for a moment every so often, which gives the game the presses it
++/// counts, as a hand tapping would.
++pub struct VerticalPulse {
++    since: Option<(std::time::Instant, bool)>,
++}
++
++/// How long the stick is held before the first let-go, how often it comes after, and how long it lasts (more than a frame of the
++/// game, which reads the pad once or twice a frame).
++const PULSE_FIRST: std::time::Duration = std::time::Duration::from_millis(160);
++const PULSE_EVERY: std::time::Duration = std::time::Duration::from_millis(130);
++const PULSE_OFF: std::time::Duration = std::time::Duration::from_millis(45);
++
++impl VerticalPulse {
++    pub const fn new() -> VerticalPulse {
++        VerticalPulse { since: None }
++    }
++
++    /// The vertical axis of the right stick the game gets at `now` for the value `y` the player gives.
++    pub fn apply(&mut self, now: std::time::Instant, y: f32) -> f32 {
++        if y.abs() <= GAME_AXIS_PUSHED {
++            self.since = None;
++            return y;
++        }
++        let up = y > 0.0;
++        let start = match self.since {
++            Some((t, was_up)) if was_up == up => t,
++            _ => {
++                self.since = Some((now, up));
++                now
++            }
++        };
++        let held = now.duration_since(start);
++        if held >= PULSE_FIRST && (held - PULSE_FIRST).as_micros() % PULSE_EVERY.as_micros() < PULSE_OFF.as_micros() {
++            0.0
++        } else {
++            y
++        }
++    }
++}
++
++impl Default for VerticalPulse {
++    fn default() -> VerticalPulse {
++        VerticalPulse::new()
+     }
+-    let now = (crate::FRAMES.load(Relaxed) / 20) as u32;
+-    if LAST.swap(now, Relaxed) != now {
+-        let angle = |v: (f32, f32)| v.1.atan2(v.0).to_degrees().rem_euclid(360.0);
++}
++
++/// The right stick's vertical axis through [`VerticalPulse`] (on unless `MH3U_STICK_TURBO` is `off`/`0`).
++pub fn pulse_vertical(y: f32) -> f32 {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    static STATE: std::sync::Mutex<VerticalPulse> = std::sync::Mutex::new(VerticalPulse::new());
++    let on = *ON.get_or_init(|| {
++        let on = switch_setting(std::env::var("MH3U_STICK_TURBO").ok().as_deref(), true);
+         eprintln!(
+-            "[stick] pushed ({:.2}, {:.2}) length {:.2} angle {:.0}; for the game ({:.2}, {:.2}) length {:.2} angle {:.0}; gain {:.2}",
+-            pushed.0,
+-            pushed.1,
+-            pushed.0.hypot(pushed.1),
+-            angle(pushed),
+-            scaled.0,
+-            scaled.1,
+-            scaled.0.hypot(scaled.1),
+-            angle(scaled),
+-            load(&RIGHT_STICK_GAIN)
++            "[input] the right stick held up or down {} (MH3U_STICK_TURBO=off {})",
++            if on { "is pulsed so the game counts presses" } else { "is left as it is" },
++            if on { "turns it off" } else { "is set" }
+         );
++        on
++    });
++    if !on {
++        return y;
++    }
++    STATE.lock().unwrap_or_else(|e| e.into_inner()).apply(std::time::Instant::now(), y)
++}
++
++/// What the game would make of a push of the right stick (the camera's and the aim's directions): none under the length it counts
++/// (about 0.37), up or down in the 60 degrees around the vertical, else a side. Only used to tell the log when it changes.
++fn stick_sector(v: (f32, f32)) -> u32 {
++    if v.0.hypot(v.1) < 0.37 {
++        return 0;
++    }
++    let angle = v.1.atan2(v.0).to_degrees().rem_euclid(360.0);
++    if (60.0..120.0).contains(&angle) {
++        1
++    } else if (240.0..300.0).contains(&angle) {
++        2
++    } else {
++        3
+     }
+ }
++
++/// The right stick as pushed and as scaled for the game, in the log: a line each time the push changes between nothing, up, down and
++/// a side (so a camera or an aim that does not go up or down shows what the game was given), and with `MH3U_TRACE_STICK=1` also a
++/// few times a second while it is pushed. `MH3U_TRACE_STICK=0` turns it off.
++fn log_right_stick(pushed: (f32, f32), scaled: (f32, f32)) {
++    static LAST_TIME: AtomicU32 = AtomicU32::new(0);
++    static LAST_SECTOR: AtomicU32 = AtomicU32::new(0);
++    static LAST_CHANGE: AtomicU32 = AtomicU32::new(0);
++    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
++    let mode = *MODE.get_or_init(|| match std::env::var("MH3U_TRACE_STICK").ok().as_deref().map(str::trim) {
++        Some("0") => 0,
++        Some(_) => 2,
++        None => 1,
++    });
++    if mode == 0 {
++        return;
++    }
++    let sector = stick_sector(scaled);
++    let frame = crate::FRAMES.load(Relaxed) as u32;
++    // a change is told at most ten times a second, so a stick going round does not fill the log
++    let changed = LAST_SECTOR.load(Relaxed) != sector && frame.wrapping_sub(LAST_CHANGE.load(Relaxed)) >= 6;
++    if changed {
++        LAST_SECTOR.store(sector, Relaxed);
++        LAST_CHANGE.store(frame, Relaxed);
++    }
++    let now = frame / 20;
++    let periodic = mode == 2 && pushed.0.hypot(pushed.1) > RIGHT_STICK_DEAD && LAST_TIME.swap(now, Relaxed) != now;
++    if !changed && !periodic {
++        return;
++    }
++    let angle = |v: (f32, f32)| v.1.atan2(v.0).to_degrees().rem_euclid(360.0);
++    eprintln!(
++        "[stick] {} pushed ({:.2}, {:.2}) length {:.2} angle {:.0}; for the game ({:.2}, {:.2}) length {:.2} angle {:.0}; gain {:.2}",
++        ["none", "up", "down", "side"][sector as usize],
++        pushed.0,
++        pushed.1,
++        pushed.0.hypot(pushed.1),
++        angle(pushed),
++        scaled.0,
++        scaled.1,
++        scaled.0.hypot(scaled.1),
++        angle(scaled),
++        load(&RIGHT_STICK_GAIN)
++    );
++}
+ static SWALLOWED: AtomicU32 = AtomicU32::new(0);
+ pub static OVERLAY_PRESSES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+ /// Back (View, Select) and the right shoulder button held together open and close the overlay. The game has no use for the pair:
+@@ -362,17 +483,31 @@ impl Input {
+ 
+     /// The buttons held, with the sticks' directions as buttons.
+     pub fn hold(&self) -> u32 {
++        self.hold_mapped(crate::padmap::current())
++    }
++
++    fn hold_mapped(&self, map: &crate::padmap::PadMap) -> u32 {
+         if OVERLAY_OPEN.load(Relaxed) {
+             return 0;
+         }
+         let (s, right) = self.sticks_and_right_as_pushed();
+-        let pad = if pads_heard() { self.pad.load(Relaxed) } else { 0 };
++        // the combination's buttons are the overlay's (read raw), and the player's remap (`padmap`) comes after them
++        let pad = if pads_heard() {
++            map.apply(self.pad.load(Relaxed) & !SWALLOWED.load(Relaxed))
++        } else {
++            0
++        };
+         // the right stick's direction buttons follow the stick as it is pushed, not as scaled: with a low sensitivity the scaled stick
+         // never gets as far as the buttons' threshold
+         let all = self.keyboard.load(Relaxed) | pad | stick_buttons(s[0], s[1], true) | stick_buttons(right.0, right.1, false);
+         all & !SWALLOWED.load(Relaxed)
+     }
+ 
++    /// The gamepads' buttons as the pads gave them: not remapped, and whether or not the window has the focus (`padmap::listen`).
++    pub fn raw_pad_buttons(&self) -> u32 {
++        self.pad.load(Relaxed)
++    }
++
+     /// The gamepads' buttons only (not the keyboard's).
+     pub fn pad_buttons(&self) -> u32 {
+         if OVERLAY_OPEN.load(Relaxed) || !pads_heard() {
+@@ -660,6 +795,10 @@ mod background {
+                     if self.scanned.is_none_or(|t| now.duration_since(t) >= RESCAN) {
+                         self.scanned = Some(now);
+                         self.slot = (0..4).find(|&i| Self::state(i).is_some());
++                        if let Some(slot) = self.slot {
++                            // the pad's name for the launcher's list (the gilrs events that say it are dropped while this reads the pad)
++                            eprintln!("gamepad: XInput controller {}", slot + 1);
++                        }
+                     }
+                     self.slot.and_then(Self::state)
+                 }
+@@ -776,6 +915,12 @@ mod tests {
+         input.set_pad_button(button::R, true);
+         assert!(OVERLAY_TOGGLE.swap(false, Relaxed));
+         assert_eq!(input.hold(), 0, "the combination's buttons are the overlay's");
++        let remap = crate::padmap::PadMap::parse("R>ZL,MINUS>A").0;
++        assert_eq!(
++            input.hold_mapped(&remap),
++            0,
++            "a remap does not give the combination's buttons to the game"
++        );
+         // a press event repeated for a button already held (some backends send them) does not toggle again
+         input.set_pad_button(button::R, true);
+         input.set_pad_button(button::MINUS, true);
+@@ -811,6 +956,29 @@ mod tests {
+         assert_eq!(i.hold() & button::A, 0);
+     }
+ 
++    #[test]
++    fn a_remap_changes_the_pads_buttons_and_not_the_keyboards_or_the_sticks() {
++        let i = Input::new();
++        let remap = crate::padmap::PadMap::parse("B>A,A>B,ZL>").0;
++        i.set_pad_button(button::B, true);
++        assert_eq!(i.hold_mapped(&remap), button::A);
++        i.set_pad_button(button::ZL, true);
++        assert_eq!(i.hold_mapped(&remap), button::A, "a button turned off does nothing");
++        i.set_keyboard_button(button::B, true);
++        assert_eq!(i.hold_mapped(&remap), button::A | button::B, "the keyboard has its own bindings");
++        i.set_pad_axis(0, 0.9);
++        assert_eq!(
++            i.hold_mapped(&remap) & button::STICK_L_RIGHT,
++            button::STICK_L_RIGHT,
++            "the sticks' buttons stay"
++        );
++        assert_eq!(
++            i.raw_pad_buttons(),
++            button::B | button::ZL,
++            "what the pad gave is what the listener reports"
++        );
++    }
++
+     /// The angle of a vector in degrees, 0 to the right and 90 up.
+     fn degrees(v: (f32, f32)) -> f32 {
+         v.1.atan2(v.0).to_degrees().rem_euclid(360.0)
+@@ -820,11 +988,14 @@ mod tests {
+     fn the_sensitivity_scales_the_right_stick_and_keeps_its_direction() {
+         // a push 24 degrees off straight up (66 degrees), full length: inside the 60 degrees sector of up (60 to 120)
+         let push = (66f32.to_radians().cos(), 66f32.to_radians().sin());
+-        for gain in [0.2f32, 0.5, 1.0, 1.5] {
++        for gain in [0.6f32, 0.8, 1.0, 1.5] {
+             let scaled = scale_right_stick(push.0, push.1, gain);
+-            assert!((degrees(scaled) - 66.0).abs() < 0.01, "gain {gain}: the angle is the same");
+-            assert!((scaled.0.hypot(scaled.1) - gain.min(1.0)).abs() < 0.001, "gain {gain}: the length is scaled and at most 1");
++            assert!((degrees(scaled) - 66.0).abs() < 3.0, "gain {gain}: the direction stays (within the game's marks)");
++            assert!(scaled.0.hypot(scaled.1) <= 1.0001, "gain {gain}: at most 1");
+         }
++        // a plain push keeps the angle and scales the length when no mark of the game is in the way
++        let side = scale_right_stick(0.9, 0.1, 0.8);
++        assert!((degrees(side) - degrees((0.9, 0.1))).abs() < 0.01 && (side.0.hypot(side.1) - 0.8 * 0.9055).abs() < 0.01);
+         // scaling and limiting each axis on its own (what was done) bends that push towards the diagonal and out of the sector
+         let bent = ((push.0 * 1.5).clamp(-1.0, 1.0), (push.1 * 1.5).clamp(-1.0, 1.0));
+         assert!(degrees(bent) < 60.0, "the old way left the sector of up");
+@@ -832,14 +1003,67 @@ mod tests {
+         assert_eq!(scale_right_stick(0.03, 0.02, 1.5), (0.0, 0.0));
+     }
+ 
++    #[test]
++    fn a_held_vertical_stick_is_pulsed_and_a_gentle_or_sideways_one_is_not() {
++        use std::time::{Duration, Instant};
++        let t0 = Instant::now();
++        let ms = |n: u64| t0 + Duration::from_millis(n);
++        let mut p = VerticalPulse::new();
++        // held up: on at first, let go for a moment from 160 ms on, again 130 ms later
++        assert_eq!(p.apply(ms(0), 0.9), 0.9);
++        assert_eq!(p.apply(ms(100), 0.9), 0.9);
++        assert_eq!(p.apply(ms(165), 0.9), 0.0);
++        assert_eq!(p.apply(ms(210), 0.9), 0.9);
++        assert_eq!(p.apply(ms(260), 0.9), 0.9);
++        assert_eq!(p.apply(ms(165 + 130 + 10), 0.9), 0.0);
++        assert_eq!(p.apply(ms(165 + 130 + 60), 0.9), 0.9);
++        // let go and pushed again: starts over; the other way too
++        assert_eq!(p.apply(ms(400), 0.0), 0.0);
++        assert_eq!(p.apply(ms(410), -0.9), -0.9);
++        assert_eq!(p.apply(ms(410 + 170), -0.9), 0.0);
++        assert_eq!(p.apply(ms(410 + 175), 0.9), 0.9, "a change of direction starts over");
++        // under the game's mark (0.5) nothing is touched, for as long as it is held
++        let mut q = VerticalPulse::new();
++        for n in (0..1000).step_by(10) {
++            assert_eq!(q.apply(ms(n), 0.45), 0.45);
++        }
++    }
++
++    #[test]
++    fn a_low_sensitivity_never_takes_a_push_under_the_marks_the_game_counts() {
++        // the camera's up and down went at 50 % (an axis must be past 0.5) and its sides need a length of 0.37
++        for gain in [0.2f32, 0.3, 0.4, 0.5, 0.51, 0.7, 1.0, 1.5] {
++            for degrees_ in (0..360).step_by(5) {
++                let a = (degrees_ as f32).to_radians();
++                for length in [0.3f32, 0.38, 0.45, 0.55, 0.8, 1.0] {
++                    let (x, y) = (a.cos() * length, a.sin() * length);
++                    let (sx, sy) = scale_right_stick(x, y, gain);
++                    if y.abs() > GAME_AXIS_PUSHED {
++                        assert!(sy.abs() > GAME_AXIS_PUSHED, "gain {gain}, push ({x:.2}, {y:.2}) -> ({sx:.2}, {sy:.2}): up/down lost");
++                    }
++                    if x.abs() > GAME_AXIS_PUSHED {
++                        assert!(sx.abs() > GAME_AXIS_PUSHED, "gain {gain}, push ({x:.2}, {y:.2}) -> ({sx:.2}, {sy:.2}): side lost");
++                    }
++                    if length > 0.375 {
++                        assert!(sx.hypot(sy) >= 0.37, "gain {gain}, push ({x:.2}, {y:.2}) -> ({sx:.2}, {sy:.2}): too short for the camera's sides");
++                    }
++                    if gain <= 1.0 {
++                        assert!(sy.abs() <= GAME_AXIS_SAFE + 0.001 || y.abs() > GAME_AXIS_PUSHED || sy.abs() <= y.abs() + 0.001, "gain {gain}: a push that was not past the mark must not become one");
++                    }
++                }
++            }
++        }
++    }
++
+     #[test]
+     fn the_right_sticks_direction_buttons_follow_the_push_and_not_the_sensitivity() {
+         let i = Input::new();
+         set_right_stick_gain(0.3);
+-        // pushed straight up as far as it goes: the game's analog value is small but the stick's button is still pressed
++        // pushed straight up as far as it goes: the game's value is as small as the sensitivity lets it be without losing the game's
++        // mark for up (0.5), and the stick's button is still pressed
+         i.set_pad_axis(2, 0.0);
+         i.set_pad_axis(3, 1.0);
+-        assert!(i.sticks()[3] > 0.25 && i.sticks()[3] < 0.35);
++        assert!(i.sticks()[3] > GAME_AXIS_PUSHED && i.sticks()[3] < 0.6);
+         assert_eq!(i.hold() & button::STICK_R_UP, button::STICK_R_UP);
+         // a push that is small as pushed is no button, whatever the sensitivity
+         set_right_stick_gain(1.5);
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index 41b94a1..97a564f 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -33,6 +33,7 @@ pub struct AssertSend<T>(pub T);
+ unsafe impl<T> Send for AssertSend<T> {}
+ pub mod mods;
+ pub mod net;
++pub mod padmap;
+ pub mod scene;
+ pub mod swkbd;
+ mod sync;
+diff --git a/crates/mh3u-rt/src/padmap.rs b/crates/mh3u-rt/src/padmap.rs
+new file mode 100644
+index 0000000..4432125
+--- /dev/null
++++ b/crates/mh3u-rt/src/padmap.rs
+@@ -0,0 +1,213 @@
++//! The gamepad button remapper: which GamePad button each button of the player's pad counts as.
++//!
++//! It works on the GamePad buttons after every pad reader (gilrs, XInput, HID) has turned its own into them with the layout
++//! (`MH3U_PAD_LAYOUT`), so it is the same for every pad. `MH3U_PAD_MAP` lists what is not as usual, as `from>to` pairs separated by
++//! commas: `B>A,A>B` swaps A and B, `ZL>` turns ZL off, `X>A+Y` makes X press A and Y together. Names: `A B X Y L R ZL ZR Plus Minus
++//! Home Up Down Left Right L3 R3`, in any case. A button not listed keeps doing what it did.
++//!
++//! The overlay's combination (Back + R) and the buttons of the overlay are read before the map, so no map can lock the player out.
++
++use crate::input::button;
++use std::sync::OnceLock;
++
++/// The buttons that can be mapped, by name.
++pub const NAMES: [(&str, u32); 17] = [
++    ("A", button::A),
++    ("B", button::B),
++    ("X", button::X),
++    ("Y", button::Y),
++    ("L", button::L),
++    ("R", button::R),
++    ("ZL", button::ZL),
++    ("ZR", button::ZR),
++    ("PLUS", button::PLUS),
++    ("MINUS", button::MINUS),
++    ("HOME", button::HOME),
++    ("UP", button::UP),
++    ("DOWN", button::DOWN),
++    ("LEFT", button::LEFT),
++    ("RIGHT", button::RIGHT),
++    ("L3", button::STICK_L),
++    ("R3", button::STICK_R),
++];
++
++/// The name of a single button's bit.
++pub fn name_of(mask: u32) -> Option<&'static str> {
++    NAMES.iter().find(|(_, m)| *m == mask).map(|(n, _)| *n)
++}
++
++fn bit_of(name: &str) -> Option<u32> {
++    let name = name.trim().to_ascii_uppercase();
++    NAMES.iter().find(|(n, _)| *n == name).map(|(_, m)| *m)
++}
++
++/// What each button of a pad counts as.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct PadMap {
++    /// For each of `NAMES`, the buttons it presses (its own bit by default; 0 for none).
++    to: [u32; NAMES.len()],
++}
++
++impl Default for PadMap {
++    fn default() -> PadMap {
++        let mut to = [0; NAMES.len()];
++        for (t, (_, m)) in to.iter_mut().zip(NAMES) {
++            *t = m;
++        }
++        PadMap { to }
++    }
++}
++
++impl PadMap {
++    /// From a `MH3U_PAD_MAP` value. What cannot be read is left out and said in the second part (one line per problem).
++    pub fn parse(text: &str) -> (PadMap, Vec<String>) {
++        let mut map = PadMap::default();
++        let mut problems = Vec::new();
++        for pair in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
++            let Some((from, to)) = pair.split_once('>') else {
++                problems.push(format!("`{pair}` is not from>to"));
++                continue;
++            };
++            let Some(i) = bit_of(from).and_then(|m| NAMES.iter().position(|(_, x)| *x == m)) else {
++                problems.push(format!("`{}` is not a button", from.trim()));
++                continue;
++            };
++            let mut mask = 0;
++            let mut ok = true;
++            for part in to.split('+').map(str::trim).filter(|p| !p.is_empty()) {
++                match bit_of(part) {
++                    Some(m) => mask |= m,
++                    None => {
++                        problems.push(format!("`{part}` is not a button"));
++                        ok = false;
++                    }
++                }
++            }
++            if ok {
++                map.to[i] = mask;
++            }
++        }
++        (map, problems)
++    }
++
++    /// Whether nothing is changed.
++    pub fn is_default(&self) -> bool {
++        *self == PadMap::default()
++    }
++
++    /// The buttons the game gets for the pad buttons held (the bits that are not mappable buttons pass as they are).
++    pub fn apply(&self, held: u32) -> u32 {
++        let known = NAMES.iter().fold(0, |a, (_, m)| a | m);
++        let mut out = held & !known;
++        for ((_, m), to) in NAMES.iter().zip(self.to) {
++            if held & m != 0 {
++                out |= to;
++            }
++        }
++        out
++    }
++}
++
++/// The map of this run, read from `MH3U_PAD_MAP` the first time it is asked for (and described in the log then).
++pub fn current() -> &'static PadMap {
++    static MAP: OnceLock<PadMap> = OnceLock::new();
++    MAP.get_or_init(|| {
++        let text = std::env::var("MH3U_PAD_MAP").unwrap_or_default();
++        let (map, problems) = PadMap::parse(&text);
++        for p in &problems {
++            eprintln!("[input] MH3U_PAD_MAP: {p}; left out");
++        }
++        if !map.is_default() {
++            eprintln!("[input] gamepad buttons remapped (MH3U_PAD_MAP={text})");
++        }
++        map
++    })
++}
++
++/// `mh3u-tools pad-listen`: reads the pads as the game does (no window, so XInput and the HID reader) and writes `down NAME` and
++/// `up NAME` on stdout for each GamePad button pressed and let go, with the layout of `MH3U_PAD_LAYOUT` but no remap, so the launcher
++/// can ask the player to press the button to map. The pads' own lines (`gamepad: ...`, `[hid] ...`) go to stderr. Ends after
++/// `seconds`, or when the reader of stdout goes away.
++pub fn listen(seconds: u64) {
++    use crate::input::{FOCUSED, INPUT, start_gamepads};
++    use std::io::Write;
++    use std::sync::atomic::Ordering::Relaxed;
++    use std::time::{Duration, Instant};
++    // no window: gilrs hears nothing then on Windows, which is the case the background XInput reader is for
++    FOCUSED.store(false, Relaxed);
++    start_gamepads();
++    let end = Instant::now() + Duration::from_secs(seconds);
++    let mut held = 0;
++    let mut out = std::io::stdout().lock();
++    while Instant::now() < end {
++        std::thread::sleep(Duration::from_millis(5));
++        let now = INPUT.raw_pad_buttons();
++        if now == held {
++            continue;
++        }
++        for (name, m) in NAMES {
++            if (now ^ held) & m != 0 && writeln!(out, "{} {name}", if now & m != 0 { "down" } else { "up" }).is_err() {
++                return;
++            }
++        }
++        if out.flush().is_err() {
++            return;
++        }
++        held = now;
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn nothing_listed_changes_nothing() {
++        let (m, problems) = PadMap::parse("");
++        assert!(m.is_default() && problems.is_empty());
++        let held = button::A | button::ZL | button::STICK_R | button::STICK_L_UP;
++        assert_eq!(m.apply(held), held);
++    }
++
++    #[test]
++    fn a_swap_turns_a_button_off_and_two_at_once_work() {
++        let (m, problems) = PadMap::parse("b>a, A>B ,zl>,x>A+Y");
++        assert!(problems.is_empty(), "{problems:?}");
++        assert_eq!(m.apply(button::B), button::A);
++        assert_eq!(m.apply(button::A), button::B);
++        assert_eq!(m.apply(button::A | button::B), button::A | button::B);
++        assert_eq!(m.apply(button::ZL), 0);
++        assert_eq!(m.apply(button::X), button::A | button::Y);
++        assert_eq!(m.apply(button::R), button::R, "what is not listed is as usual");
++    }
++
++    #[test]
++    fn two_buttons_on_one_target_and_the_sticks_directions_pass() {
++        let (m, _) = PadMap::parse("L>ZL,R>ZL");
++        assert_eq!(m.apply(button::L | button::R), button::ZL);
++        let stick = button::STICK_R_UP | button::STICK_L_LEFT;
++        assert_eq!(
++            m.apply(stick | button::L),
++            stick | button::ZL,
++            "the sticks' buttons are not remapped"
++        );
++    }
++
++    #[test]
++    fn what_cannot_be_read_is_left_out_and_said() {
++        let (m, problems) = PadMap::parse("A>B,Q>A,B>Z,junk,X>Y+nope");
++        assert_eq!(problems.len(), 4, "{problems:?}");
++        assert_eq!(m.apply(button::A), button::B, "the good pair still counts");
++        assert_eq!(m.apply(button::B), button::B);
++        assert_eq!(m.apply(button::X), button::X, "a pair with a bad target is not half-applied");
++    }
++
++    #[test]
++    fn every_name_round_trips() {
++        for (n, m) in NAMES {
++            assert_eq!(bit_of(n), Some(m));
++            assert_eq!(name_of(m), Some(n));
++        }
++        assert_eq!(NAMES.iter().fold(0u32, |a, (_, m)| a | m).count_ones(), 17);
++    }
++}
+diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
+index fc0f9ec..f414831 100644
+--- a/crates/mh3u-tools/src/main.rs
++++ b/crates/mh3u-tools/src/main.rs
+@@ -57,6 +57,12 @@ enum Tool {
+         #[arg(long)]
+         show: Option<usize>,
+     },
++    /// Say which GamePad button each button of the connected pads presses (`down A`, `up A`, one per line), for the launcher's button
++    /// remapper. Needs no game; ends after the given seconds.
++    PadListen {
++        #[arg(long, default_value_t = 300)]
++        seconds: u64,
++    },
+     /// Print instructions of the code with their fields (for finding out what the code is doing; not a full disassembler).
+     Disasm {
+         game_dir: PathBuf,
+@@ -300,6 +306,10 @@ fn real_main() -> Result<()> {
+             let save = save_dir.unwrap_or_else(|| c_dir.join("save"));
+             run_game(&dump(&game_dir)?, &c_dir, max_imports, save, window, fullscreen)
+         }
++        Tool::PadListen { seconds } => {
++            mh3u_rt::padmap::listen(seconds);
++            Ok(())
++        }
+         Tool::Disasm { game_dir, start, count } => {
+             let data = read(&dump(&game_dir)?.executable()?)?;
+             let text = rpx::section_at(&data, TEXT_ADDRESS)?;

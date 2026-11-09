@@ -22,6 +22,7 @@ import re
 import hidhide
 import i18n
 import netcheck
+import padmap
 from qtshim import END, filedialog, license_dialog, messagebox
 import socket
 import webbrowser
@@ -41,7 +42,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.14"
+APP_VERSION = "v0.9.15"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -645,6 +646,7 @@ class LauncherLogic:
             "scale": "2",
             "fullscreen": True,
             "pad_layout": "xbox",
+            "pad_map": {},
             "overlay": True,
             "keyboard_controls": True,
             "fps": False,
@@ -1622,7 +1624,14 @@ class LauncherLogic:
         self.refresh_status()
         messagebox.showinfo("Configuración Online", "Parámetros de red y salas guardados correctamente.")
 
+    def _stop_pad_listener(self):
+        """The button remapper's reader of the pads (Controls tab), if it is running."""
+        listener = getattr(self, "pad_listener", None)
+        if listener:
+            listener.stop()
+
     def on_app_close(self):
+        self._stop_pad_listener()
         self._stop_server_process()
         self.destroy()
 
@@ -2072,6 +2081,7 @@ class LauncherLogic:
         if self.is_running:
             messagebox.showinfo("Juego en ejecución", "El juego ya se está ejecutando.")
             return
+        self._stop_pad_listener()  # the game reads the pads itself
 
         tools = get_tools_path()
         games_dir = self.config.get("games_dir", "")
@@ -2181,6 +2191,9 @@ class LauncherLogic:
 
         if self.config.get("pad_layout"):
             env["MH3U_PAD_LAYOUT"] = self.config["pad_layout"]
+        pad_map = padmap.PadMap(self.config.get("pad_map")).to_env()
+        if pad_map:
+            env["MH3U_PAD_MAP"] = pad_map  # the button remapper (Controls tab)
         if self.config.get("scale"):
             env["MH3U_GFX_RESOLUTION_SCALE"] = str(self.config["scale"])
         if self.config.get("keyboard_controls", True):

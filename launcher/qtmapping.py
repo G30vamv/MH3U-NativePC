@@ -49,11 +49,18 @@ class PadDiagram(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
         self.active = None  # the button picked in the list
+        self.pressed = set()  # the buttons held on the real pad right now
         self._hover = None
 
     def set_active(self, name):
         self.active = name
         self.update()
+
+    def set_pressed(self, ids):
+        ids = set(ids)
+        if ids != self.pressed:
+            self.pressed = ids
+            self.update()
 
     def _box(self):
         # keep the controller's proportions inside the widget
@@ -115,7 +122,7 @@ class PadDiagram(QWidget):
         r = b.width()
         for name, (_x, _y, kind) in BUTTONS.items():
             c = self._pos(name)
-            hot = name == self.active
+            hot = name == self.active or name in self.pressed
             over = name == self._hover
             glow = hot or over
             if kind in ("face",):

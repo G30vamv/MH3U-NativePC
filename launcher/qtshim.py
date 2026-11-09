@@ -178,6 +178,14 @@ class filedialog:  # noqa: N801
     def askdirectory(title="", initialdir=""):
         return on_main(lambda: QFileDialog.getExistingDirectory(None, title, initialdir)) or ""
 
+    @staticmethod
+    def askopenfilename(title="", initialdir="", filter=""):  # noqa: A002
+        return on_main(lambda: QFileDialog.getOpenFileName(None, title, initialdir, filter)[0]) or ""
+
+    @staticmethod
+    def asksaveasfilename(title="", initialdir="", filter=""):  # noqa: A002
+        return on_main(lambda: QFileDialog.getSaveFileName(None, title, initialdir, filter)[0]) or ""
+
 
 def font(size=None, bold=False, family=None, pixel=False):
     f = QFont(family or "Segoe UI")

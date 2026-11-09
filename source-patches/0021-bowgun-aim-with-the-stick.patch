@@ -1,0 +1,174 @@
+diff --git a/crates/mh3u-rt/src/cafe.rs b/crates/mh3u-rt/src/cafe.rs
+index 7da6c41..1741e1c 100644
+--- a/crates/mh3u-rt/src/cafe.rs
++++ b/crates/mh3u-rt/src/cafe.rs
+@@ -386,7 +386,6 @@ fn simple(name: &str) -> Option<SimpleHandler> {
+             g.put_u32(buffer + 8, os.pad_edges.1);
+             let mut sticks = input.sticks();
+             sticks[3] = crate::input::pulse_vertical(sticks[3]);
+-            crate::combat::probe_aim(g, sticks);
+             for (i, v) in sticks.iter().enumerate() {
+                 g.put_u32(buffer + 0xc + 4 * i as u32, v.to_bits());
+             }
+diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
+index c0f5451..4e03f2a 100644
+--- a/crates/mh3u-rt/src/cheats.rs
++++ b/crates/mh3u-rt/src/cheats.rs
+@@ -108,6 +108,9 @@ pub fn register(r: &mut Registry) -> usize {
+     if probing() && r.on("hit_resolve", Box::new(probe_hit)) {
+         eprintln!("[cheats] probe on: the target of each monster hit is compared with how it was at the one before");
+     }
++    // the bowgun's aim: always on (a fix, not a cheat)
++    r.on("aim_pitch", aim_pitch());
++
+     let Ok(spec) = std::env::var("MH3U_CHEATS") else { return 0 };
+     let mut on = 0;
+     for (id, value) in parse(&spec) {
+@@ -220,6 +223,38 @@ fn infinite_sharpness(_: f32) -> Callback {
+     })
+ }
+ 
++/// The bowgun's vertical aim. `aim_pitch` is `f_028a19b8(hunter)`, the per-frame update of a ranged weapon's aim, which turns the hunter
++/// towards `ctrl+0x184` (the target pitch). While aiming (`+0x58` and `+0xe00` are 1) the game moves that target with orders 0x2b/0x2c
++/// that nothing sets on this port, so the aim never moved. Here the target follows the pad instead: X (0x2000, the stick pushed up) raises
++/// it, Y (0x1000, down) lowers it, within the game's own limits (-0x3e93..0x3e94).
++fn aim_pitch() -> Callback {
++    let n = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        let g = Guest::new(h.ctx.mem);
++        let ctrl = g.u32(h.ctx.r[3].wrapping_add(0xe30));
++        if ctrl == 0 || g.u8(ctrl + 0x58) != 1 {
++            return;
++        }
++        let pad = g.u16(ctrl + 0x19c);
++        let step: i32 = match (pad & 0x2000 != 0, pad & 0x1000 != 0) {
++            (true, false) => -AIM_STEP,
++            (false, true) => AIM_STEP,
++            _ => return,
++        };
++        let now = i32::from(g.u32(ctrl + 0x184) as u16 as i16);
++        let step = (step as f32 * crate::input::right_stick_gain()).round() as i32;
++        let to = (now + step).clamp(-0x3e93, 0x3e94);
++        g.put_u32(ctrl + 0x184, to as u32 & 0xffff);
++        let k = n.fetch_add(1, Relaxed);
++        if k < 3 || k % 300 == 0 {
++            eprintln!("[aim] pitch target {now:#x} -> {to:#x} (pad {pad:04x}, e00 {}, time {})", g.u8(ctrl + 0xe00), k + 1);
++        }
++    })
++}
++
++/// How far the aim's target pitch moves on each update of the aim while the stick is held.
++const AIM_STEP: i32 = 0x90;
++
+ /// The zenny a gain of `change` becomes with the multiplier (a loss, or nothing, stays as it is).
+ fn zenny(change: i32, times: f32) -> i32 {
+     if change <= 0 {
+diff --git a/crates/mh3u-rt/src/combat.rs b/crates/mh3u-rt/src/combat.rs
+index 6f2631f..f64bc9c 100644
+--- a/crates/mh3u-rt/src/combat.rs
++++ b/crates/mh3u-rt/src/combat.rs
+@@ -607,88 +607,3 @@ mod tests {
+         with_state(|s| s.monsters.clear());
+     }
+ }
+-
+-/// `sAppPad`'s instance pointer (the game's pad as the rest of it reads it).
+-const APPPAD_SINGLETON: u32 = 0x1031_2bb0;
+-/// `sPad`'s instance pointer; `+0x38` and `+0x3c` hold the main loop's counters at the last pad update and `+0x40` how far they moved
+-/// (what the game's key repeat counts with).
+-const PAD_SINGLETON: u32 = 0x102c_ea34;
+-
+-/// A diagnostic for the bowgun's aim: while the right stick is pushed, two lines a second say what the game holds about the local
+-/// hunter's controls (`*(hunter + 0xe30)`: its state, whether it stands on the ground, the pad words it works from) and about the pad
+-/// (`sAppPad`: the stick as angle and length). Nothing is written to the game. At most 400 lines in a run.
+-pub fn probe_aim(g: &Guest, sticks: [f32; 4]) {
+-    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+-    static LINES: AtomicU32 = AtomicU32::new(0);
+-    if (sticks[2].hypot(sticks[3]) < 0.3 && sticks[0].hypot(sticks[1]) < 0.3) || LINES.load(Relaxed) >= 400 {
+-        return;
+-    }
+-    {
+-        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+-        let now = std::time::Instant::now();
+-        if last.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(500)) {
+-            return;
+-        }
+-        *last = Some(now);
+-    }
+-    let Some(number) = local_slot(g) else { return };
+-    let hunter = g.u32(g.u32(PLAYER_SINGLETON) + 0x40 + 4 * u32::from(number));
+-    let ctrl = g.u32(hunter + 0xe30);
+-    let app = g.u32(APPPAD_SINGLETON);
+-    let game = g.u32(GAME_SINGLETON);
+-    if ctrl == 0 || app == 0 {
+-        return;
+-    }
+-    LINES.fetch_add(1, Relaxed);
+-    let words = |at: u32, n: u32| (0..n).map(|i| format!("{:04x}", g.u16(at + 2 * i))).collect::<Vec<_>>().join(" ");
+-    eprintln!(
+-        "[aim probe] right stick ({:.2}, {:.2}) left stick ({:.2}, {:.2}); hunter {number}: state {} land {} +58 {} +e00 {} item-window {} \
+-         pad words {} | ctrl 1ac-1c2 {} | hunter angles pitch {:04x} yaw {:04x} | app 134-13e {} 144 angle {:04x} {:04x} length {} {} | button config (slot:action/held) {} | action group {} id {:#x} flags bae/baf/bb0 {}{}{} staging {:08x} {:08x} | camera gate: sGame+4e {} +48 {} +3c4 {} ctrl+9ab {} +5e8 {:08x} status[2400..240a] {} | commands now {:08x} before {:08x} | aim target pitch {:04x} pitch {:04x} input {} | spad counters {} {} step {}",
+-        sticks[2],
+-        sticks[3],
+-        sticks[0],
+-        sticks[1],
+-        g.u8(ctrl + 2),
+-        g.u8(ctrl + 0x3d),
+-        g.u8(ctrl + 0x58),
+-        g.u8(ctrl + 0xe00),
+-        g.u8(ctrl + 0x1542),
+-        words(ctrl + 0x19c, 6),
+-        words(ctrl + 0x1ac, 12),
+-        g.u32(ctrl + 0x11c) & 0xffff,
+-        g.u32(ctrl + 0x120) & 0xffff,
+-        words(app + 0x134, 6),
+-        g.u16(app + 0x144),
+-        g.u16(app + 0x146),
+-        g.u32(app + 0x148),
+-        g.u32(app + 0x14c),
+-        (0..0x24u32)
+-            .filter_map(|i| {
+-                let (action, held) = (g.u16(ctrl + 0x4d8 + 4 * i), g.u16(ctrl + 0x4da + 4 * i) as i16);
+-                (action != 0 || held != 0).then(|| format!("{i:x}:{action:x}/{held}"))
+-            })
+-            .collect::<Vec<_>>()
+-            .join(" "),
+-        g.u8(ctrl + 0x3e),
+-        g.u16(ctrl + 0x40),
+-        g.u8(ctrl + 0xbae),
+-        g.u8(ctrl + 0xbaf),
+-        g.u8(ctrl + 0xbb0),
+-        g.u32(ctrl + 0x1c8),
+-        g.u32(ctrl + 0x1cc),
+-        g.u8(game + 0x4e),
+-        g.u8(game + 0x48),
+-        g.u32(game + 0x3c4),
+-        g.u8(ctrl + 0x9ab),
+-        g.u32(ctrl + 0x5e8),
+-        (0..11).map(|i| format!("{:x}", g.u8(hunter + 0x2400 + i))).collect::<String>(),
+-        g.u32(ctrl + 0x1d0),
+-        g.u32(ctrl + 0x1f0),
+-        g.u32(ctrl + 0x184) & 0xffff,
+-        g.u16(ctrl + 0x188),
+-        g.u16(ctrl + 0xe80) as i16,
+-        g.u32(g.u32(PAD_SINGLETON) + 0x38),
+-        g.u32(g.u32(PAD_SINGLETON) + 0x3c),
+-        g.u32(g.u32(PAD_SINGLETON) + 0x40)
+-    );
+-}
+diff --git a/crates/mh3u-rt/src/input.rs b/crates/mh3u-rt/src/input.rs
+index 8f73769..c513bf1 100644
+--- a/crates/mh3u-rt/src/input.rs
++++ b/crates/mh3u-rt/src/input.rs
+@@ -139,6 +139,11 @@ pub static OVERLAY_SETTINGS_ONLY: AtomicBool = AtomicBool::new(false);
+ /// Settings window set it.
+ static RIGHT_STICK_GAIN: AtomicU32 = AtomicU32::new(0x3f80_0000);
+ 
++/// The right stick's current gain (1.0 = as the pad reports).
++pub fn right_stick_gain() -> f32 {
++    load(&RIGHT_STICK_GAIN)
++}
++
+ pub fn set_right_stick_gain(gain: f32) {
+     store(&RIGHT_STICK_GAIN, gain.clamp(0.2, 1.5));
+ }

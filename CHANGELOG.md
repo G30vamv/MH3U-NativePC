@@ -4,7 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
-## [Unreleased]
+## [0.9.15] - 2026-11-09
+
+### Fixed
+- **Aiming the bowgun up and down** works now, both through the sight and in third person: the aim follows the right stick (and its sensitivity setting). It never did before in this port.
+- **Looking up and down with the camera stick** no longer stops when the camera sensitivity is set very low or very high (and aiming with the bowgun with it). The sensitivity now only changes how far the stick is pushed, not where it points.
+- **The damage meter now counts your damage in a room.** When you join a friend's room the monsters' life reaches you a moment late, and the meter, which only looked at the last few frames after your hit, left your damage and DPS out. It now looks at the last second.
+
+### Added
+- **Button remapper for gamepads.** The Controls tab now remaps buttons for real: pick an action, press the button of your gamepad that you want to use for it (Xbox, PlayStation, Nintendo or generic pads; the picture shows what you press as you press it), and the game uses it from then on. Buttons can be turned off, the map can be reset, exported and imported as a file, and the two default profiles (Xbox and Nintendo layouts) are one click away. The Back + R combination that opens the game's panels is never remapped, so a wrong map cannot lock you out.
+- **Damage of every hunter in the meter.** In a room the damage panel also lists each hunter whose hits your game sees, with their share and DPS (you first, marked *You*).
+- The game's log now writes the first hits and falls of a monster's life, to see what a room looks like from your side.
 
 ## [0.9.14] - 2026-11-08
 

@@ -1,5 +1,5 @@
 ============================================================
-  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, NATIVE PC PORT (v0.9.14)
+  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, NATIVE PC PORT (v0.9.15)
   Launcher developed by: g30wolff99
 ============================================================
 
@@ -13,7 +13,7 @@ This package is 100% PORTABLE and SELF-CONTAINED (it works straight after unzipp
 - Glass interface with a live summary of your settings; optional Acrylic effect (Windows 11 only).
 - Support for link-time optimisation ThinLTO (-flto=thin + -O3).
 - The native engine 'mh3u-tools.exe', tuned, with an FPS counter and a smooth interface.
-- Official graphical launcher v0.9.14 with a scrollable real-time log.
+- Official graphical launcher v0.9.15 with a scrollable real-time log.
 - The launcher and the game's panels (F1 / F2) come in English and Spanish: the language follows
   Windows (English if it is neither) and can be changed with the gear button in the title bar.
 
@@ -37,8 +37,8 @@ QUICK STEPS TO PLAY (FIRST TIME ONLY):
 4. In "Graphics Settings":
    - You can set the native resolution (1x, 2x 1440p, 4K),
      the AMD FSR 1.0 or AMD CAS upscaler, and the sharpness level.
-   - The "Controls & Gamepads" tab has the gamepad layout and the camera sensitivity
-     (button mapping comes in a later version).
+   - The "Controls & Gamepads" tab has the button remapper (pick an action and press the button
+     of your gamepad that you want to use), the gamepad layout and the camera sensitivity.
    - Inside the game, F2 opens quick settings (resolution, upscaling, sharpness, VSync,
      FPS counter, camera sensitivity and language); F1 opens the full panel. The gamepad's B button closes them.
 5. Done! Press "PLAY".

@@ -1,0 +1,867 @@
+diff --git a/crates/mh3u-gfx/src/overlay.rs b/crates/mh3u-gfx/src/overlay.rs
+index c8fde2b..8ce9d97 100644
+--- a/crates/mh3u-gfx/src/overlay.rs
++++ b/crates/mh3u-gfx/src/overlay.rs
+@@ -448,6 +448,16 @@ impl Overlay {
+                             .size(13.0)
+                             .color(HUD_BLUE),
+                     );
++                    // each hunter that has hurt a monster, when there is more than one (a room): the share and the DPS of each
++                    if hud.hunters.len() > 1 {
++                        let total = hud.dealt.max(1) as f32;
++                        for h in &hud.hunters {
++                            let name = if h.own { l.p("You", "Tú").to_string() } else { format!("{} {}", l.p("Hunter", "Cazador"), h.slot + 1) };
++                            let text = egui::RichText::new(format!("{name}: {}  ({:.0} %)  DPS {:.0}", h.dealt, h.dealt as f32 / total * 100.0, h.dps))
++                                .size(12.0);
++                            ui.label(if h.own { text.color(HUD_BLUE) } else { text });
++                        }
++                    }
+                 });
+             });
+             if out.response.drag_stopped() {
+diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
+index ce4a35e..c0f5451 100644
+--- a/crates/mh3u-rt/src/cheats.rs
++++ b/crates/mh3u-rt/src/cheats.rs
+@@ -189,14 +189,14 @@ fn monster_life(_: f32) -> Callback {
+     crate::combat::monster_init()
+ }
+ 
+-/// The damage meter needs to know the monsters, and which hits are the hunter's own.
++/// The damage meter needs to know the monsters, and who made each hit.
+ fn damage_meter_monsters(_: f32) -> Callback {
+     crate::combat::enable_meter();
+     crate::combat::monster_init()
+ }
+ 
+ fn damage_meter_hits(_: f32) -> Callback {
+-    crate::combat::mark_own_hits()
++    crate::combat::note_hits()
+ }
+ 
+ fn infinite_sharpness(_: f32) -> Callback {
+diff --git a/crates/mh3u-rt/src/combat.rs b/crates/mh3u-rt/src/combat.rs
+index 0618629..f64bc9c 100644
+--- a/crates/mh3u-rt/src/combat.rs
++++ b/crates/mh3u-rt/src/combat.rs
+@@ -1,17 +1,19 @@
+-//! Read-only combat information for the overlay: the life of the monsters of a quest and what the hunter has done to them.
++//! Read-only combat information for the overlay: the life of the monsters of a quest and what each hunter has done to them.
+ //!
+ //! The monsters are found when the game sets their life at spawn (the hook `monster_init`, `uEnemy::initMaxHp` 0x0259fc98, r3 = the
+ //! monster). Their state is `*(monster + 0x1be0)` (the game's own table of debug properties names the fields, see `docs/ghidra.md`):
+-//! `+0x8b8` is the life now and `+0x8bc` the most it has (`hp_vital` and `max_hp_vital`, 32-bit), `+2` its id (`em_id`).
++//! `+0x8b8` is the life now and `+0x8bc` the most it has (`hp_vital` and `max_hp_vital`, 32-bit), `+3` its id (`em_id`).
+ //!
+-//! At each frame swap (`mods::on_frame`, with the baton) the monsters are read: what a monster's life went down by is damage dealt;
+-//! it counts as the hunter's own when one of the hunter's hits was resolved a moment before (`hit_resolve` marks them). Nothing is
+-//! written to the game. The overlay draws what [`snapshot`] gives.
++//! At each frame swap (`mods::on_frame`, with the baton) the monsters are read: what a monster's life went down by is damage dealt.
++//! Every hit a hunter lands on a monster passes `hit_resolve`, which says who made it (the number of the hunter in the game's player
++//! table); a fall of life is shared among the hits of the last second ([`ATTRIB_SECS`], by their base damage), so the damage of each
++//! hunter, yours among them, can be shown. A client gets the life of the monsters from the host a moment late, which is why this is a
++//! window of time and not of frames. Nothing is written to the game. The overlay draws what [`snapshot`] gives.
+ 
+ use crate::guest::Guest;
+ use crate::hooks::{Callback, Hook};
+ use std::collections::VecDeque;
+-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
++use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+ use std::sync::{Arc, Mutex};
+ 
+ /// `sPlayer`'s and `sGame`'s instance pointers; the players table is at `sPlayer + 0x40` (8 pointers) and the local player's number
+@@ -22,22 +24,38 @@ const GAME_SINGLETON: u32 = 0x101f_db9c;
+ const MONSTER_STATE: u32 = 0x1be0;
+ const HP_NOW: u32 = 0x8b8;
+ const HP_MAX: u32 = 0x8bc;
+-const EM_ID: u32 = 2;
+-/// Another reader of the same structure finds the id one byte further (`+3`, with a 1 in `+4`) and the monsters' names came out
+-/// wrong with `+2` (a small monster with a large one's name): the diagnostic line of `on_frame` shows the bytes, `monster_id` picks.
+-const EM_ID_ALT: u32 = 3;
++/// The id of the kind of monster (`em_id`) is the byte at `+3` of the state (`+2` is the number of this monster among the ones of its
++/// kind: 0, 1, 2...; reading it as the id gave a small monster a large one's name). The byte at `+2` is only the way out when `+3`
++/// holds no id (1 to 85).
++///
++/// TO GO BACK: this rule is new (0019); the one of 0014 to 0018 took `+3` only when `+4` held a 1 and the byte at `+2` otherwise, and
++/// the names looked right in the online test of the 8th of November 2026 (the log of the first read showed `+4` = 0 in some
++/// monsters, which only read the wrong id for a frame). If the names of the monsters look wrong with this rule, this is the cause:
++/// put `monster_id` back as it was (see `git log` or the patch 0018's `combat.rs`).
++const EM_ID: u32 = 3;
++const EM_NUMBER: u32 = 2;
+ 
+ /// The most monsters followed at once.
+ const MOST_MONSTERS: usize = 24;
+-/// Frames after one of the hunter's hits in which a fall of a monster's life is counted as the hunter's.
+-const OWN_FRAMES: u64 = 3;
++/// Seconds before a fall of a monster's life in which a hit can be its cause. The life of a monster reaches a client from the host
++/// (a delay seen of about half a second), so a frame count (3 frames are 15 ms at 200 fps) left the client's own damage out.
++const ATTRIB_SECS: f32 = 1.0;
++/// The hits remembered, and for how long (seconds).
++const MOST_HITS: usize = 256;
++const HIT_KEEP_SECS: f32 = 5.0;
++/// The hunters of a quest (the game's player table has 8 entries).
++const SLOTS: usize = 8;
+ /// The seconds the DPS looks back over.
+ const WINDOW_SECS: f32 = 5.0;
++/// Diagnostic lines written to the log: the first hits and the first falls of life (to learn what a client sees).
++const LOG_LINES: u32 = 40;
+ 
+ static LIFE_ON: AtomicBool = AtomicBool::new(false);
+ static METER_ON: AtomicBool = AtomicBool::new(false);
+-/// The frame (`crate::FRAMES`) of the last hit of the hunter's own.
+-static OWN_HIT: AtomicU64 = AtomicU64::new(0);
++static HIT_LINES: AtomicU32 = AtomicU32::new(0);
++static FALL_LINES: AtomicU32 = AtomicU32::new(0);
++static MONSTER_LINES: AtomicU32 = AtomicU32::new(0);
++static OTHER_SEEN: AtomicBool = AtomicBool::new(false);
+ 
+ /// The life bars are on (the cheat `monsterhp`).
+ pub fn enable_life() {
+@@ -68,27 +86,60 @@ pub struct Monster {
+     pub max: i32,
+ }
+ 
++/// What one hunter has done to the monsters.
++#[derive(Clone, Debug, PartialEq)]
++pub struct HunterDamage {
++    /// The hunter's number in the game's player table (0..7).
++    pub slot: u8,
++    /// Whether it is the hunter that plays here.
++    pub own: bool,
++    pub dealt: i64,
++    /// Damage a second over the last [`WINDOW_SECS`] seconds.
++    pub dps: f32,
++}
++
+ /// What the overlay draws.
+ #[derive(Clone, Debug, Default, PartialEq)]
+ pub struct Snapshot {
+     pub monsters: Vec<Monster>,
+-    /// Damage the monsters' life went down by since the counters began: all of it, and the part after the hunter's own hits.
++    /// Damage the monsters' life went down by since the counters began: all of it (also what no hit explains), and the hunter's own.
+     pub dealt: i64,
+     pub dealt_own: i64,
+     /// Damage a second over the last [`WINDOW_SECS`] seconds (the hunter's own), and the mean since the first hit.
+     pub dps: f32,
+     pub dps_mean: f32,
++    /// Each hunter that has hurt a monster, the most damage first.
++    pub hunters: Vec<HunterDamage>,
+     pub life_on: bool,
+     pub meter_on: bool,
+ }
+ 
++/// A hit of a hunter on a monster, as `hit_resolve` saw it.
++struct Hit {
++    at: f32,
++    slot: u8,
++    /// The base damage of the hit (what the fall of life is shared by).
++    weight: f32,
++}
++
++/// One fall of a monster's life, shared out: the part each hunter gets (what no hit explains is in no slot).
++struct Fall {
++    at: f32,
++    per_slot: [f32; SLOTS],
++}
++
+ struct State {
+     /// The monsters, with the life each had at the last frame (-1: not read yet).
+     monsters: Vec<(u32, i32)>,
+-    /// (seconds since the start, damage, the hunter's own) of each fall of life, newest last.
+-    falls: VecDeque<(f32, i32, bool)>,
+-    dealt: i64,
+-    dealt_own: i64,
++    /// Each fall of life shared out, newest last.
++    falls: VecDeque<Fall>,
++    /// The hits of the last seconds, newest last.
++    hits: VecDeque<Hit>,
++    /// Damage each hunter has done since the counters began, and what no hit explains.
++    by_slot: [f64; SLOTS],
++    unexplained: f64,
++    /// The number of the hunter that plays here, as of the last hit seen.
++    local: Option<u8>,
+     first_hit: Option<f32>,
+     last_hit: f32,
+     started: std::time::Instant,
+@@ -102,8 +153,10 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
+     f(s.get_or_insert_with(|| State {
+         monsters: Vec::new(),
+         falls: VecDeque::new(),
+-        dealt: 0,
+-        dealt_own: 0,
++        hits: VecDeque::new(),
++        by_slot: [0.0; SLOTS],
++        unexplained: 0.0,
++        local: None,
+         first_hit: None,
+         last_hit: 0.0,
+         started: std::time::Instant::now(),
+@@ -111,32 +164,75 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
+     }))
+ }
+ 
+-/// A monster began to exist: it is followed from now on. The counters start again when no monster was left.
+-pub fn add_monster(address: u32) {
++impl State {
++    fn clear_counters(&mut self) {
++        self.falls.clear();
++        self.hits.clear();
++        self.by_slot = [0.0; SLOTS];
++        self.unexplained = 0.0;
++        self.first_hit = None;
++    }
++
++    /// Shares a fall of life of `fall` points seen at `now` among the hits of the last [`ATTRIB_SECS`] by their base damage; with no
++    /// hit in that time it is damage nobody's hit explains (a poison, a trap, a hit this machine did not see). Returns how many hits
++    /// it was shared among.
++    fn share_fall(&mut self, now: f32, fall: f32) -> usize {
++        let mut per_slot = [0.0f32; SLOTS];
++        let mut shared = 0;
++        let total: f32 = self.hits.iter().filter(|h| now - h.at <= ATTRIB_SECS).map(|h| h.weight).sum();
++        if total > 0.0 {
++            for h in self.hits.iter().filter(|h| now - h.at <= ATTRIB_SECS) {
++                per_slot[usize::from(h.slot)] += fall * h.weight / total;
++                shared += 1;
++            }
++            for (slot, part) in per_slot.iter().enumerate() {
++                self.by_slot[slot] += f64::from(*part);
++            }
++        } else {
++            self.unexplained += f64::from(fall);
++        }
++        self.falls.push_back(Fall { at: now, per_slot });
++        self.first_hit.get_or_insert(now);
++        self.last_hit = now;
++        shared
++    }
++}
++
++/// A monster began to exist: it is followed from now on (true the first time). The counters start again when no monster was left.
++pub fn add_monster(address: u32) -> bool {
+     with_state(|s| {
+         if s.monsters.iter().any(|m| m.0 == address) {
+-            return;
++            return false;
+         }
+         if s.monsters.is_empty() {
+-            s.falls.clear();
+-            s.dealt = 0;
+-            s.dealt_own = 0;
+-            s.first_hit = None;
++            s.clear_counters();
+         }
+         if s.monsters.len() >= MOST_MONSTERS {
+             s.monsters.remove(0);
+         }
+         s.monsters.push((address, -1));
+-    });
++        true
++    })
+ }
+ 
+ /// Starts the counters again (what the overlay's button does).
+ pub fn reset() {
++    with_state(State::clear_counters);
++}
++
++/// A hit of the hunter in slot `slot` on a monster, with its base damage; `local` is the number of the hunter that plays here.
++pub fn note_hit(slot: u8, base_damage: f32, local: Option<u8>) {
++    if usize::from(slot) >= SLOTS {
++        return;
++    }
++    let weight = if base_damage.is_finite() && base_damage >= 1.0 { base_damage } else { 1.0 };
+     with_state(|s| {
+-        s.falls.clear();
+-        s.dealt = 0;
+-        s.dealt_own = 0;
+-        s.first_hit = None;
++        let at = s.started.elapsed().as_secs_f32();
++        s.local = local;
++        s.hits.push_back(Hit { at, slot, weight });
++        while s.hits.len() > MOST_HITS || s.hits.front().is_some_and(|h| at - h.at > HIT_KEEP_SECS) {
++            s.hits.pop_front();
++        }
+     });
+ }
+ 
+@@ -145,19 +241,34 @@ pub fn snapshot() -> Arc<Snapshot> {
+     with_state(|s| s.snapshot.clone())
+ }
+ 
+-/// The hunter that plays here (the game's player table, entry `sGame + 0x4b`), or 0.
+-pub fn local_hunter(g: &Guest) -> u32 {
++/// The number of the hunter that plays here (the game's player table, entry `sGame + 0x4b`), or none.
++pub fn local_slot(g: &Guest) -> Option<u8> {
+     let (players, game) = (g.u32(PLAYER_SINGLETON), g.u32(GAME_SINGLETON));
+     if players == 0 || game == 0 {
+-        return 0;
++        return None;
+     }
+     let number = g.u8(game + 0x4b);
+-    if number >= 8 {
+-        return 0;
++    if usize::from(number) >= SLOTS {
++        return None;
+     }
+     let hunter = g.u32(players + 0x40 + 4 * u32::from(number));
+     // the game checks the same top bits of the object's flags before it trusts an entry
+-    if hunter != 0 && matches!(g.u32(hunter + 0xc) >> 29, 1 | 2) { hunter } else { 0 }
++    (hunter != 0 && matches!(g.u32(hunter + 0xc) >> 29, 1 | 2)).then_some(number)
++}
++
++/// The number (in the game's player table) of the hunter whose hit the record `record` is: a hit of its own (`+6` = 0, the hunter at
++/// `+0x10`) or one of an object it made (`+6` = 2, made by a hunter `+7` = 0, whose owner is at `+0x14`); none for anything else.
++pub fn attacker_slot(g: &Guest, record: u32) -> Option<u8> {
++    let hunter = match g.u8(record + 6) {
++        0 => g.u32(record + 0x10),
++        2 if g.u8(record + 7) == 0 => g.u32(record + 0x14),
++        _ => return None,
++    };
++    let players = g.u32(PLAYER_SINGLETON);
++    if hunter == 0 || players == 0 {
++        return None;
++    }
++    (0..SLOTS as u32).find(|i| g.u32(players + 0x40 + 4 * i) == hunter).map(|i| i as u8)
+ }
+ 
+ /// Whether the address can hold a monster the game made.
+@@ -178,11 +289,10 @@ pub fn read_monster(g: &Guest, address: u32) -> Option<(u8, i32, i32)> {
+     (max > 0 && max <= 5_000_000 && (0..=max).contains(&now)).then(|| (monster_id(g, state), now, max))
+ }
+ 
+-/// The kind of monster whose state is at `state`: the byte at `+3` when a 1 follows it (the layout the other reader describes),
+-/// else the byte at `+2`.
++/// The kind of monster whose state is at `state`: the byte at `+3` when it holds an id (1 to 85), else the byte at `+2`.
+ fn monster_id(g: &Guest, state: u32) -> u8 {
+-    let alt = g.u8(state + EM_ID_ALT);
+-    if g.u8(state + EM_ID_ALT + 1) == 1 && (1..=85).contains(&alt) { alt } else { g.u8(state + EM_ID) }
++    let id = g.u8(state + EM_ID);
++    if (1..=85).contains(&id) { id } else { g.u8(state + EM_NUMBER) }
+ }
+ 
+ /// At each frame swap: reads the monsters and counts what their life went down by. Does nothing when nothing of this is on.
+@@ -190,23 +300,21 @@ pub(crate) fn on_frame(g: &Guest) {
+     if !enabled() {
+         return;
+     }
+-    let frame = crate::FRAMES.load(Relaxed);
+-    let own = frame.wrapping_sub(OWN_HIT.load(Relaxed)) <= OWN_FRAMES;
+     with_state(|s| {
+         let now_s = s.started.elapsed().as_secs_f32();
+-        let mut list = Vec::with_capacity(s.monsters.len());
+-        let mut kept = Vec::with_capacity(s.monsters.len());
+-        for &(address, before) in &s.monsters {
++        let monsters = std::mem::take(&mut s.monsters);
++        let mut list = Vec::with_capacity(monsters.len());
++        let mut kept = Vec::with_capacity(monsters.len());
++        for (address, before) in monsters {
+             let Some((id, hp, max)) = read_monster(g, address) else {
+                 // gone (or not ready yet): dropped once it has been seen to exist, kept while it has not been read at all
+-                if before >= 0 {
+-                    continue;
++                if before < 0 {
++                    kept.push((address, before));
+                 }
+-                kept.push((address, before));
+                 continue;
+             };
+             if before < 0 {
+-                // the first time this monster is read: the bytes where its id may be, to settle which one is (the next test shows it)
++                // the first time this monster is read: the bytes where its id is
+                 let state = g.u32(address + MONSTER_STATE);
+                 let b: Vec<String> = (0..8).map(|i| format!("{:02x}", g.u8(state + i))).collect();
+                 eprintln!(
+@@ -218,71 +326,81 @@ pub(crate) fn on_frame(g: &Guest) {
+             }
+             if before > hp {
+                 let fall = before - hp;
+-                s.dealt += i64::from(fall);
+-                if own {
+-                    s.dealt_own += i64::from(fall);
++                let shared = s.share_fall(now_s, fall as f32);
++                let n = FALL_LINES.fetch_add(1, Relaxed);
++                if n < LOG_LINES {
++                    let since = s.hits.back().map_or("no hit yet".to_string(), |h| format!("{} ms after the last hit", ((now_s - h.at) * 1000.0) as i32));
++                    eprintln!("[combat] fall {}: -{fall} on {address:#x} ({hp}/{max}), {since}, shared among {shared} hit(s)", n + 1);
+                 }
+-                s.falls.push_back((now_s, fall, own));
+-                s.first_hit.get_or_insert(now_s);
+-                s.last_hit = now_s;
+             }
+             kept.push((address, hp));
+             list.push(Monster { address, id, hp, max });
+         }
+         s.monsters = kept;
+-        while s.falls.front().is_some_and(|f| now_s - f.0 > 60.0) {
++        while s.falls.front().is_some_and(|f| now_s - f.at > 60.0) {
+             s.falls.pop_front();
+         }
+-        let in_window: i64 = s.falls.iter().filter(|f| f.2 && now_s - f.0 <= WINDOW_SECS).map(|f| i64::from(f.1)).sum();
+-        let mean = s.first_hit.map_or(0.0, |t| {
+-            // the time from the first hit to the last, at least a second so a single hit does not give a huge number
+-            s.dealt_own as f32 / (s.last_hit - t).max(1.0)
+-        });
++        let window = |slot: usize| s.falls.iter().filter(|f| now_s - f.at <= WINDOW_SECS).map(|f| f.per_slot[slot]).sum::<f32>() / WINDOW_SECS;
++        let local = s.local.map(usize::from);
++        let mut hunters: Vec<HunterDamage> = (0..SLOTS)
++            .filter(|&i| s.by_slot[i] >= 1.0)
++            .map(|i| HunterDamage { slot: i as u8, own: local == Some(i), dealt: s.by_slot[i].round() as i64, dps: window(i) })
++            .collect();
++        hunters.sort_by_key(|h| std::cmp::Reverse(h.dealt));
++        let dealt = (s.by_slot.iter().sum::<f64>() + s.unexplained).round() as i64;
++        let dealt_own = local.map_or(0, |i| s.by_slot[i].round() as i64);
++        let dps = local.map_or(0.0, window);
++        // the mean runs from the first fall to the last, at least a second so a single hit does not give a huge number
++        let mean = match (s.first_hit, local) {
++            (Some(first), Some(i)) => s.by_slot[i] as f32 / (s.last_hit - first).max(1.0),
++            _ => 0.0,
++        };
+         s.snapshot = Arc::new(Snapshot {
+             monsters: list,
+-            dealt: s.dealt,
+-            dealt_own: s.dealt_own,
+-            dps: in_window as f32 / WINDOW_SECS,
++            dealt,
++            dealt_own,
++            dps,
+             dps_mean: mean,
++            hunters,
+             life_on: LIFE_ON.load(Relaxed),
+             meter_on: METER_ON.load(Relaxed),
+         });
+     });
+ }
+ 
+-/// The callback of `monster_init`: r3 is the monster.
++/// The callback of `monster_init`: r3 is the monster. (The life bars and the meter both hook it: a monster is told once.)
+ pub fn monster_init() -> Callback {
+     Box::new(|h: &mut Hook| {
+         let monster = h.ctx.r[3];
+-        if plausible(monster) {
+-            add_monster(monster);
+-            if h.calls < 12 {
+-                eprintln!("[combat] monster {monster:#x} appeared (call {})", h.calls + 1);
+-            }
++        if plausible(monster) && add_monster(monster) && MONSTER_LINES.fetch_add(1, Relaxed) < 12 {
++            eprintln!("[combat] monster {monster:#x} appeared");
+         }
+     })
+ }
+ 
+-/// Whether the hit record `record` was made by the hunter at `hunter` (its own hit, or an object it made).
+-pub fn own_hit(g: &Guest, record: u32, hunter: u32) -> bool {
+-    if hunter == 0 || record == 0 {
+-        return false;
+-    }
+-    match g.u8(record + 6) {
+-        0 => g.u32(record + 0x10) == hunter,
+-        // an object (a shell, a bomb): its maker's class is in +7 and the owner in +0x14
+-        2 => g.u8(record + 7) == 0 && g.u32(record + 0x14) == hunter,
+-        _ => false,
+-    }
+-}
+-
+-/// The callback of `hit_resolve` for the meter: marks the frame of each of the hunter's own hits.
+-pub fn mark_own_hits() -> Callback {
++/// The callback of `hit_resolve` for the meter: notes each hit a hunter (this one or another) lands, with its base damage.
++pub fn note_hits() -> Callback {
+     Box::new(|h: &mut Hook| {
+         let record = h.ctx.r[5];
++        if record == 0 {
++            return;
++        }
+         let g = Guest::new(h.ctx.mem);
+-        if own_hit(&g, record, local_hunter(&g)) {
+-            OWN_HIT.store(crate::FRAMES.load(Relaxed), Relaxed);
++        let Some(slot) = attacker_slot(&g, record) else { return };
++        let base = f32::from_bits(g.u32(record + 0x44));
++        let local = local_slot(&g);
++        note_hit(slot, base, local);
++        let own = local == Some(slot);
++        let n = HIT_LINES.fetch_add(1, Relaxed);
++        if n < LOG_LINES {
++            eprintln!(
++                "[combat] hit {}: hunter {slot} ({}), record class {}, base damage {base:.0}",
++                n + 1,
++                if own { "this one" } else { "another one" },
++                g.u8(record + 6)
++            );
++        } else if !own && !OTHER_SEEN.swap(true, Relaxed) {
++            eprintln!("[combat] first hit of another hunter (hunter {slot}) seen on this machine");
+         }
+     })
+ }
+@@ -304,6 +422,27 @@ mod tests {
+         g.put_u8(state + EM_ID, 25);
+     }
+ 
++    /// Starts a quest with one monster at full life (2000).
++    fn start(g: &Guest) {
++        ENABLED_FOR_TEST.store(true, Relaxed);
++        with_state(|s| s.monsters.clear());
++        reset();
++        put_monster(g, 2000, 2000);
++        add_monster(0x2000_0000);
++        on_frame(g);
++    }
++
++    fn stop() {
++        reset();
++        with_state(|s| s.monsters.clear());
++        ENABLED_FOR_TEST.store(false, Relaxed);
++    }
++
++    /// Makes every hit noted so far look `secs` older.
++    fn age_hits(secs: f32) {
++        with_state(|s| s.hits.iter_mut().for_each(|h| h.at -= secs));
++    }
++
+     #[test]
+     fn a_monsters_life_is_read_through_its_state() {
+         let mut memory = crate::memory::GuestMemory::reserve().unwrap();
+@@ -325,44 +464,40 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn the_id_is_the_byte_before_a_one_when_there_is_one_and_the_plain_byte_otherwise() {
++    fn the_id_is_the_byte_at_3_and_the_number_at_2_is_not_taken_for_it() {
+         let mut memory = crate::memory::GuestMemory::reserve().unwrap();
+         let g = Guest::new(memory.as_mut_ptr());
+         put_monster(&g, 1800, 2000);
+         let state = g.u32(0x2000_0000 + MONSTER_STATE);
+-        // the layout where the id is at +3 with a 1 at +4 (a Great Jaggi, 12)
+-        g.put_u8(state + 3, 12);
++        // a Great Jaggi (12), the second of its kind (number 1 at +2): the id, whatever +4 holds (a monster not set up yet has 0)
++        g.put_u8(state + EM_NUMBER, 1);
++        g.put_u8(state + EM_ID, 12);
+         g.put_u8(state + 4, 1);
+         assert_eq!(monster_id(&g, state), 12);
+-        // no 1 after it, or a number that is no monster: the byte at +2 (25 in `put_monster`)
+         g.put_u8(state + 4, 0);
+-        assert_eq!(monster_id(&g, state), 25);
+-        g.put_u8(state + 3, 200);
+-        g.put_u8(state + 4, 1);
+-        assert_eq!(monster_id(&g, state), 25);
++        assert_eq!(monster_id(&g, state), 12);
++        // +3 holds no id: the way out is the byte at +2
++        g.put_u8(state + EM_ID, 200);
++        assert_eq!(monster_id(&g, state), 1);
+     }
+ 
+     #[test]
+-    fn what_a_monsters_life_goes_down_by_is_damage_and_the_hunters_own_after_its_hits() {
++    fn a_fall_of_life_is_the_damage_of_the_hunter_whose_hit_came_a_moment_before() {
+         let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+         let mut memory = crate::memory::GuestMemory::reserve().unwrap();
+         let g = Guest::new(memory.as_mut_ptr());
+-        ENABLED_FOR_TEST.store(true, Relaxed);
+-        reset();
+-        with_state(|s| s.monsters.clear());
+-        put_monster(&g, 2000, 2000);
+-        add_monster(0x2000_0000);
+-        on_frame(&g);
++        start(&g);
+         assert_eq!(snapshot().monsters, vec![Monster { address: 0x2000_0000, id: 25, hp: 2000, max: 2000 }]);
+-        // the life falls with a hit of the hunter's own a moment before
+-        OWN_HIT.store(crate::FRAMES.load(Relaxed), Relaxed);
++        note_hit(0, 100.0, Some(0));
+         put_monster(&g, 1700, 2000);
+         on_frame(&g);
+         let s = snapshot();
+         assert_eq!((s.dealt, s.dealt_own), (300, 300));
+         assert!(s.dps > 0.0 && s.dps_mean > 0.0);
+-        // a fall long after it is not the hunter's
+-        OWN_HIT.store(crate::FRAMES.load(Relaxed).wrapping_sub(100), Relaxed);
++        assert_eq!(s.hunters.len(), 1);
++        assert!(s.hunters[0].own && s.hunters[0].dealt == 300);
++        // a fall no hit explains is in the total and in nobody's
++        age_hits(10.0);
+         put_monster(&g, 1600, 2000);
+         on_frame(&g);
+         let s = snapshot();
+@@ -371,49 +506,103 @@ mod tests {
+         put_monster(&g, 1900, 2000);
+         on_frame(&g);
+         assert_eq!(snapshot().dealt, 400);
+-        reset();
+-        with_state(|s| s.monsters.clear());
+-        ENABLED_FOR_TEST.store(false, Relaxed);
++        stop();
+     }
+ 
+     #[test]
+-    fn the_hunters_own_hits_are_told_from_the_others() {
+-        let mut m = vec![0u8; 0x400];
+-        let g = Guest::new(m.as_mut_ptr());
+-        let (record, hunter) = (0x100u32, 0x2000u32);
++    fn a_hit_of_a_second_ago_still_explains_the_fall_a_client_sees_late() {
++        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        start(&g);
++        // the life reaches a client half a second after its hit: far more than 3 frames, and still the hunter's own
++        note_hit(1, 50.0, Some(1));
++        age_hits(0.6);
++        put_monster(&g, 1900, 2000);
++        on_frame(&g);
++        assert_eq!(snapshot().dealt_own, 100);
++        // two seconds later it explains nothing
++        age_hits(2.0);
++        put_monster(&g, 1800, 2000);
++        on_frame(&g);
++        let s = snapshot();
++        assert_eq!((s.dealt, s.dealt_own), (200, 100));
++        stop();
++    }
++
++    #[test]
++    fn a_fall_is_shared_among_the_hunters_by_the_base_damage_of_their_hits() {
++        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        start(&g);
++        note_hit(0, 100.0, Some(0));
++        note_hit(2, 300.0, Some(0));
++        put_monster(&g, 1600, 2000);
++        on_frame(&g);
++        let s = snapshot();
++        assert_eq!((s.dealt, s.dealt_own), (400, 100));
++        // the most damage first; only the hunter that plays here is `own`
++        assert_eq!(s.hunters.iter().map(|h| (h.slot, h.own, h.dealt)).collect::<Vec<_>>(), vec![(2, false, 300), (0, true, 100)]);
++        assert!(s.hunters[0].dps > s.hunters[1].dps);
++        stop();
++    }
++
++    #[test]
++    fn who_made_a_hit_is_found_in_the_players_table() {
++        let mut memory = crate::memory::GuestMemory::reserve().unwrap();
++        let g = Guest::new(memory.as_mut_ptr());
++        let (players, game, hunter, other) = (0x2000_2000u32, 0x2000_4000u32, 0x2000_3000u32, 0x2000_3400u32);
++        g.put_u32(PLAYER_SINGLETON, players);
++        g.put_u32(GAME_SINGLETON, game);
++        g.put_u32(players + 0x40 + 4 * 2, hunter);
++        g.put_u32(players + 0x40 + 4 * 5, other);
++        g.put_u32(hunter + 0xc, 1 << 29);
++        g.put_u32(other + 0xc, 1 << 29);
++        g.put_u8(game + 0x4b, 2);
++        assert_eq!(local_slot(&g), Some(2));
++        let record = 0x2000_5000u32;
+         g.put_u8(record + 6, 0);
+         g.put_u32(record + 0x10, hunter);
+-        assert!(own_hit(&g, record, hunter));
+-        assert!(!own_hit(&g, record, 0x3000), "another hunter's hit");
+-        // an object the hunter made
++        assert_eq!(attacker_slot(&g, record), Some(2));
++        g.put_u32(record + 0x10, other);
++        assert_eq!(attacker_slot(&g, record), Some(5), "another hunter's hit");
++        g.put_u32(record + 0x10, 0x2000_9000);
++        assert_eq!(attacker_slot(&g, record), None, "not a hunter of the table");
++        // an object a hunter made (a shell, a bomb): its maker's class is in +7 and the owner in +0x14
+         g.put_u8(record + 6, 2);
+         g.put_u8(record + 7, 0);
+-        g.put_u32(record + 0x14, hunter);
+-        assert!(own_hit(&g, record, hunter));
++        g.put_u32(record + 0x14, other);
++        assert_eq!(attacker_slot(&g, record), Some(5));
+         g.put_u8(record + 7, 1);
+-        assert!(!own_hit(&g, record, hunter), "an object a monster made");
++        assert_eq!(attacker_slot(&g, record), None, "an object a monster made");
+         // a monster's hit
+         g.put_u8(record + 6, 1);
+-        assert!(!own_hit(&g, record, hunter));
+-        assert!(!own_hit(&g, record, 0), "no hunter, no own hit");
++        assert_eq!(attacker_slot(&g, record), None);
++        // no hunter that plays here
++        g.put_u32(hunter + 0xc, 0);
++        assert_eq!(local_slot(&g), None);
++        g.put_u32(PLAYER_SINGLETON, 0);
++        assert_eq!(attacker_slot(&g, record), None);
+     }
+ 
+     #[test]
+     fn counters_start_again_with_the_first_monster_after_none_were_left() {
+         let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+         reset();
+-        add_monster(0x2000_0000);
++        with_state(|s| s.monsters.clear());
++        assert!(add_monster(0x2000_0000));
+         with_state(|s| {
+-            s.dealt = 500;
++            s.unexplained = 500.0;
+             s.monsters.clear();
+         });
+-        add_monster(0x2000_4000);
++        assert!(add_monster(0x2000_4000));
+         with_state(|s| {
+-            assert_eq!(s.dealt, 0, "a new quest starts from zero");
++            assert_eq!(s.unexplained, 0.0, "a new quest starts from zero");
+             assert_eq!(s.monsters.len(), 1);
+         });
+-        // the same monster twice is followed once
+-        add_monster(0x2000_4000);
++        // the same monster twice is followed once (and told once)
++        assert!(!add_monster(0x2000_4000));
+         with_state(|s| assert_eq!(s.monsters.len(), 1));
+         with_state(|s| s.monsters.clear());
+     }
+diff --git a/crates/mh3u-rt/src/input.rs b/crates/mh3u-rt/src/input.rs
+index a6eb8b6..f8e07ab 100644
+--- a/crates/mh3u-rt/src/input.rs
++++ b/crates/mh3u-rt/src/input.rs
+@@ -142,6 +142,49 @@ static RIGHT_STICK_GAIN: AtomicU32 = AtomicU32::new(0x3f80_0000);
+ pub fn set_right_stick_gain(gain: f32) {
+     store(&RIGHT_STICK_GAIN, gain.clamp(0.2, 1.5));
+ }
++
++/// The right stick counts as pushed past this length (the keyboard and the mouse take over below it).
++const RIGHT_STICK_DEAD: f32 = 0.05;
++
++/// The right stick with the player's sensitivity: its length times `gain` (at most 1) and the same direction. The game turns the
++/// stick into an angle and a length and only counts a direction when the angle falls in a sector (the camera's up and down in one
++/// of 60 degrees around straight up and down, left and right in ones of 120) and the length is at least about 0.37, so what is
++/// scaled must keep the angle: scaling and limiting each axis on its own bent a push towards the diagonal (an up that turned into
++/// a left or a right) and, with a low sensitivity, took the small axis under a dead zone of its own.
++fn scale_right_stick(x: f32, y: f32, gain: f32) -> (f32, f32) {
++    let length = x.hypot(y);
++    if length <= RIGHT_STICK_DEAD {
++        return (0.0, 0.0);
++    }
++    let scaled = (length * gain).min(1.0);
++    (x * scaled / length, y * scaled / length)
++}
++
++/// With `MH3U_TRACE_STICK` set: the right stick as pushed and as scaled for the game, a few times a second (to see what a
++/// sensitivity does to the camera or the aim).
++fn log_right_stick(pushed: (f32, f32), scaled: (f32, f32)) {
++    static LAST: AtomicU32 = AtomicU32::new(0);
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    if !*ON.get_or_init(|| std::env::var_os("MH3U_TRACE_STICK").is_some()) || pushed.0.hypot(pushed.1) <= RIGHT_STICK_DEAD {
++        return;
++    }
++    let now = (crate::FRAMES.load(Relaxed) / 20) as u32;
++    if LAST.swap(now, Relaxed) != now {
++        let angle = |v: (f32, f32)| v.1.atan2(v.0).to_degrees().rem_euclid(360.0);
++        eprintln!(
++            "[stick] pushed ({:.2}, {:.2}) length {:.2} angle {:.0}; for the game ({:.2}, {:.2}) length {:.2} angle {:.0}; gain {:.2}",
++            pushed.0,
++            pushed.1,
++            pushed.0.hypot(pushed.1),
++            angle(pushed),
++            scaled.0,
++            scaled.1,
++            scaled.0.hypot(scaled.1),
++            angle(scaled),
++            load(&RIGHT_STICK_GAIN)
++        );
++    }
++}
+ static SWALLOWED: AtomicU32 = AtomicU32::new(0);
+ pub static OVERLAY_PRESSES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+ /// Back (View, Select) and the right shoulder button held together open and close the overlay. The game has no use for the pair:
+@@ -284,9 +327,15 @@ impl Input {
+ 
+     /// The sticks (left x, left y, right x, right y): a gamepad's when it is pushed, else the keyboard's.
+     pub fn sticks(&self) -> [f32; 4] {
++        self.sticks_and_right_as_pushed().0
++    }
++
++    /// The sticks as [`Input::sticks`] gives them, and the right stick as it was pushed (before the player's sensitivity): the
++    /// directions of the sticks that the game gets as buttons are worked out from that one, as a real GamePad does.
++    fn sticks_and_right_as_pushed(&self) -> ([f32; 4], (f32, f32)) {
+         let mut out = [0.0; 4];
+         if OVERLAY_OPEN.load(Relaxed) {
+-            return out;
++            return (out, (0.0, 0.0));
+         }
+         let (mx, my) = self
+             .mouse
+@@ -295,18 +344,20 @@ impl Input {
+             .sample(std::time::Instant::now());
+         let mouse = [0.0, 0.0, mx, my];
+         let heard = pads_heard();
+-        let gain = load(&RIGHT_STICK_GAIN);
+-        for (i, o) in out.iter_mut().enumerate() {
+-            let p = if heard { load(&self.pad_sticks[i]) } else { 0.0 };
+-            // the right stick (the camera) as far as the player wants it
+-            let p = if i >= 2 { (p * gain).clamp(-1.0, 1.0) } else { p };
+-            *o = if p.abs() > 0.05 {
+-                p
+-            } else {
+-                (load(&self.keyboard_sticks[i]) + mouse[i]).clamp(-1.0, 1.0)
+-            };
++        let pad = |i: usize| if heard { load(&self.pad_sticks[i]) } else { 0.0 };
++        let others = |i: usize| (load(&self.keyboard_sticks[i]) + mouse[i]).clamp(-1.0, 1.0);
++        for i in 0..2 {
++            let p = pad(i);
++            out[i] = if p.abs() > 0.05 { p } else { others(i) };
+         }
+-        out
++        // the right stick (the camera, the aim) is one vector: the player's sensitivity scales its length and keeps its direction
++        let (px, py) = (pad(2), pad(3));
++        let as_pushed = if px.hypot(py) > RIGHT_STICK_DEAD { (px, py) } else { (others(2), others(3)) };
++        let (rx, ry) = if px.hypot(py) > RIGHT_STICK_DEAD { scale_right_stick(px, py, load(&RIGHT_STICK_GAIN)) } else { as_pushed };
++        out[2] = rx;
++        out[3] = ry;
++        log_right_stick(as_pushed, (rx, ry));
++        (out, as_pushed)
+     }
+ 
+     /// The buttons held, with the sticks' directions as buttons.
+@@ -314,9 +365,11 @@ impl Input {
+         if OVERLAY_OPEN.load(Relaxed) {
+             return 0;
+         }
+-        let s = self.sticks();
++        let (s, right) = self.sticks_and_right_as_pushed();
+         let pad = if pads_heard() { self.pad.load(Relaxed) } else { 0 };
+-        let all = self.keyboard.load(Relaxed) | pad | stick_buttons(s[0], s[1], true) | stick_buttons(s[2], s[3], false);
++        // the right stick's direction buttons follow the stick as it is pushed, not as scaled: with a low sensitivity the scaled stick
++        // never gets as far as the buttons' threshold
++        let all = self.keyboard.load(Relaxed) | pad | stick_buttons(s[0], s[1], true) | stick_buttons(right.0, right.1, false);
+         all & !SWALLOWED.load(Relaxed)
+     }
+ 
+@@ -758,6 +811,43 @@ mod tests {
+         assert_eq!(i.hold() & button::A, 0);
+     }
+ 
++    /// The angle of a vector in degrees, 0 to the right and 90 up.
++    fn degrees(v: (f32, f32)) -> f32 {
++        v.1.atan2(v.0).to_degrees().rem_euclid(360.0)
++    }
++
++    #[test]
++    fn the_sensitivity_scales_the_right_stick_and_keeps_its_direction() {
++        // a push 24 degrees off straight up (66 degrees), full length: inside the 60 degrees sector of up (60 to 120)
++        let push = (66f32.to_radians().cos(), 66f32.to_radians().sin());
++        for gain in [0.2f32, 0.5, 1.0, 1.5] {
++            let scaled = scale_right_stick(push.0, push.1, gain);
++            assert!((degrees(scaled) - 66.0).abs() < 0.01, "gain {gain}: the angle is the same");
++            assert!((scaled.0.hypot(scaled.1) - gain.min(1.0)).abs() < 0.001, "gain {gain}: the length is scaled and at most 1");
++        }
++        // scaling and limiting each axis on its own (what was done) bends that push towards the diagonal and out of the sector
++        let bent = ((push.0 * 1.5).clamp(-1.0, 1.0), (push.1 * 1.5).clamp(-1.0, 1.0));
++        assert!(degrees(bent) < 60.0, "the old way left the sector of up");
++        // under the dead zone nothing is pushed, with any sensitivity
++        assert_eq!(scale_right_stick(0.03, 0.02, 1.5), (0.0, 0.0));
++    }
++
++    #[test]
++    fn the_right_sticks_direction_buttons_follow_the_push_and_not_the_sensitivity() {
++        let i = Input::new();
++        set_right_stick_gain(0.3);
++        // pushed straight up as far as it goes: the game's analog value is small but the stick's button is still pressed
++        i.set_pad_axis(2, 0.0);
++        i.set_pad_axis(3, 1.0);
++        assert!(i.sticks()[3] > 0.25 && i.sticks()[3] < 0.35);
++        assert_eq!(i.hold() & button::STICK_R_UP, button::STICK_R_UP);
++        // a push that is small as pushed is no button, whatever the sensitivity
++        set_right_stick_gain(1.5);
++        i.set_pad_axis(3, 0.3);
++        assert_eq!(i.hold() & button::STICK_R_UP, 0);
++        set_right_stick_gain(1.0);
++    }
++
+     #[test]
+     fn face_buttons_follow_the_layout() {
+         use gilrs::Button;

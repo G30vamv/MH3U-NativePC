@@ -3,7 +3,7 @@
 `mh3u-tools.exe` in the Releases is built from [glinesbdev/mh3u-port](https://github.com/glinesbdev/mh3u-port) (AGPL-3.0) plus the changes in these patches. The patches are under **AGPL-3.0**, like the original project.
 
 - **Base:** commit `41d3a9b` of `glinesbdev/mh3u-port` (26 Oct 2026, *Merge pull request #34*).
-- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007`, `0009` after `0008`, `0010` after `0009`, `0011` after `0010`, `0012` after `0011` `0013` after `0012`, `0014` after `0013`, `0015` after `0014` `0016` after `0015`, `0017` after `0016` and `0018` after `0017`.
+- **Order:** `0001` and `0002` are independent of each other; `0003` goes after `0002`, `0004` after `0003`, `0005` after `0004`, `0006` after `0005`, `0007` after `0006`, `0008` after `0007`, `0009` after `0008`, `0010` after `0009`, `0011` after `0010`, `0012` after `0011` `0013` after `0012`, `0014` after `0013`, `0015` after `0014` `0016` after `0015`, `0017` after `0016`, `0018` after `0017`, `0019` after `0018` and `0020` after `0019`.
 
 | Patch | Contents |
 |---|---|
@@ -25,6 +25,9 @@
 | `0016-remove-glinesbdevs-mods.patch` | Takes out the blacksmith wishlist, the forge status line in the item menu, the Mods page of the pause menu and the crate and hooks they used (`mh3u-mods`, `events.rs`, `native_menu.rs`, `native_text.rs`, `menu_probe.rs`, the wishlist and events windows of `overlay.rs`, and the extra entries of `mods/hooks.txt`), which are not part of this project. The overlay keeps its Settings and Controls windows, the on-screen panels and the keyboard window; `mods/hooks.txt` keeps the five hooks the cheats and the life and damage panels use. The game's text buffer constant moved to `cafe.rs` (same address). |
 | `0017-log-time-and-graphics-card-choice.patch` | Every line of the game's log now starts with the local time (`[14:03:22.481] [gfx frames] ...`), so it can be set beside the room server's log (`logstamp.rs`; `MH3U_LOG_TIME=off` leaves the log as it was). `MH3U_GFX_ADAPTER=<part of a card's name>` makes the game draw with that graphics card (the launcher's Graphics card list); if none matches, the log lists the cards and the usual choice is used (`lib.rs` of `mh3u-gfx`). |
 | `0018-geometry-draws-in-one-compute-pass.patch` | The compute work of the draws with a geometry shader (hundreds in the equipment screens) is recorded when the batch goes to the GPU: one clear of what they write and one compute pass for all of them, instead of two passes and two clears for each draw (`geometry.rs`, `draw.rs`). On an integrated Radeon the equipment screen runs about 7 % faster and the game's peak memory fell by some 1.7 GB. `MH3U_GFX_GS_GROUP=off` goes back to the old way. |
+| `0019-damage-meter-and-camera-stick-fixes.patch` | Several fixes in one. **Damage meter:** a monster's fall of life is counted as the damage of the hunters whose hits came in the last second (by the hits' base damage) instead of in the last 3 frames, so a player in a room, who gets the monsters' life from the host a moment late, sees their own damage and DPS; the panel also lists every hunter whose hits this machine sees; the monsters' kind is told by the byte at `+3` of their state; each monster is told once in the log, which also gets the first hits and falls of life (`combat.rs`, `cheats.rs`, the damage panel of `overlay.rs`). **Camera stick:** the right stick is scaled as a vector that keeps its angle, its dead zone is applied to its pushed length and its direction buttons follow the stick as pushed, so a low or a high sensitivity no longer loses looking up and down (and aiming) (`input.rs`; `MH3U_TRACE_STICK=1` writes what the game gets). |
+| `0020-gamepad-button-remapper.patch` | The button remapper: `MH3U_PAD_MAP` (`B>A,A>B,ZL>`: what each button of a pad counts as, or none) is applied to the GamePad buttons after every pad reader (gilrs, XInput, HID) has made them with the layout, except for the combination that opens the overlay and the buttons of the sticks (`padmap.rs`, `input.rs`, with tests); `mh3u-tools pad-listen` writes `down NAME` / `up NAME` for each button pressed on the connected pads, which is how the launcher asks the player to press the button to map (`mh3u-tools/src/main.rs`). |
+| `0021-bowgun-aim-with-the-stick.patch` | The bowgun's vertical aim: the game moves the aim with orders that nothing sets on this port, so the aim never went up or down. A hook on the per-frame update of a ranged weapon's aim (`aim_pitch`, listed in `mods/hooks.txt`) moves the target pitch from the right stick, scaled by the camera sensitivity, with the game's own limits, both aiming through the sight and in third person (`cheats.rs`, `input.rs`); the diagnostic of the bowgun's aim is removed (`combat.rs`, `cafe.rs`). |
 
 ## Reproducing the binary
 
@@ -46,7 +49,14 @@ git apply --ignore-whitespace <path>/0011-caches-survive-updates-and-thread-time
 git apply --ignore-whitespace <path>/0012-graphics-in-parallel.patch
 git apply --ignore-whitespace <path>/0013-geometry-batches-and-threads-on-amd.patch
 git apply --ignore-whitespace <path>/0014-cheats.patch
+git apply --ignore-whitespace <path>/0015-guest-threads-end-for-real.patch
+git apply --ignore-whitespace <path>/0016-remove-glinesbdevs-mods.patch
+git apply --ignore-whitespace <path>/0017-log-time-and-graphics-card-choice.patch
+git apply --ignore-whitespace <path>/0018-geometry-draws-in-one-compute-pass.patch
+git apply --ignore-whitespace <path>/0019-damage-meter-and-camera-stick-fixes.patch
+git apply --ignore-whitespace <path>/0020-gamepad-button-remapper.patch
+git apply --ignore-whitespace <path>/0021-bowgun-aim-with-the-stick.patch
 cargo build --release -p mh3u-tools
 ```
 
-Verified: the twelve patches apply cleanly on `41d3a9b`, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.
+Verified: the twenty patches apply cleanly on `41d3a9b` in that order, `mh3u-latte` tests (including the two added by 0007) pass, and the `mh3u-gfx` tests (including the FSR shader checks) pass on that tree. The original project's own checks (`fmt`, `clippy -D warnings`) were not run on the patched tree as a whole.

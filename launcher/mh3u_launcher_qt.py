@@ -27,6 +27,7 @@ import i18n
 import qtanim
 import qtmenu
 import qtshim
+import padmap
 import qtmapping
 import qttitle
 import winfx
@@ -66,6 +67,10 @@ TAB_MAIN = "🎮 Principal"
 TAB_INSTALL = "⚙️ Instalación & Dump"
 TAB_SETTINGS = "🛠️ Configuración Gráfica"
 TAB_CONTROLS = "🕹️ Controles y Mandos"
+MAP_NOTE_IDLE = "Elige una acción y pulsa en tu mando el botón que quieres usar para ella. Los cambios valen la próxima vez que pulses JUGAR."
+MAP_NOTE_ARMED = "Pulsa en tu mando el botón que quieres usar como {}… (10 s)"
+MAP_NOTE_DONE = "Listo: el botón {} del mando hará de {}."
+MAP_NOTE_NO_ENGINE = "No se pudo leer el mando: falta mh3u-tools.exe junto al launcher."
 TAB_ONLINE = "🌐 Modo Online (Beta)"
 TAB_TOOLS = "💾 Partidas & Logs"
 
@@ -373,6 +378,7 @@ class MH3ULauncherApp(LauncherLogic):
         self.tabview.add(TAB_TOOLS, self.setup_tab_tools())
         # Radmin/Tailscale/ZeroTier may have connected after the launcher opened
         self.tabview.changed.connect(lambda key: key == TAB_ONLINE.strip() and self.refresh_local_ips())
+        self.tabview.changed.connect(self._on_tab_changed)
         self.tabview.animate = True  # from here on the pages fade in when they change
 
         self.footer = self.create_footer()
@@ -863,13 +869,10 @@ class MH3ULauncherApp(LauncherLogic):
 
         info, il = _grid_card("accent")
         il.addWidget(Label("🕹️", None, 26), 0, 0, 2, 1)
-        il.addWidget(Label("Mapeado universal de botones", "#4fc3d6", 12.5, bold=True), 0, 1)
-        badge = Label("PRÓXIMAMENTE", "#fff6e0", 9, bold=True)
-        badge.setStyleSheet("color: #fff6e0; background: #b8791e; border-radius: 9px; padding: 2px 10px;")
-        il.addWidget(badge, 0, 2, Qt.AlignmentFlag.AlignRight)
+        il.addWidget(Label("Remapeador de botones", "#4fc3d6", 12.5, bold=True), 0, 1)
         text = Label(
-            "Asigna cualquier botón de cualquier mando (Xbox, PlayStation, Nintendo o genérico) a cada acción del Wii U Pro Controller, "
-            "con perfiles por mando e importar / exportar. La interfaz ya está lista; la captura de botones se activa en una próxima versión.",
+            "Asigna cualquier botón de tu mando (Xbox, PlayStation, Nintendo o genérico) a cada acción del GamePad de Wii U: "
+            "elige la acción, pulsa en tu mando el botón que quieres usar y listo. Los cambios valen la próxima vez que pulses JUGAR.",
             "#e3d8bd",
             10,
         )
@@ -887,11 +890,10 @@ class MH3ULauncherApp(LauncherLogic):
         head.setSpacing(8)
         head.addWidget(Label("Mando:", None, 10, bold=True))
         self.opt_map_device = OptionMenu(["Detectando mandos…"], width=210)
-        self.opt_map_device.setEnabled(False)
         head.addWidget(self.opt_map_device)
         head.addWidget(Label("Perfil:", None, 10, bold=True))
-        self.opt_map_profile = OptionMenu(["Predeterminado (Xbox)", "Predeterminado (Nintendo)"], width=210)
-        self.opt_map_profile.setEnabled(False)
+        self.opt_map_profile = OptionMenu(["Predeterminado (Xbox)", "Predeterminado (Nintendo)", "Personalizado"], width=210)
+        self.opt_map_profile.currentIndexChanged.connect(lambda _i: self._on_map_profile())
         head.addWidget(self.opt_map_profile)
         head.addStretch(1)
         ll.addLayout(head)
@@ -900,18 +902,22 @@ class MH3ULauncherApp(LauncherLogic):
         ll.addWidget(self.pad_diagram, 1)
         tools = QHBoxLayout()
         tools.setSpacing(8)
-        for text in ("📥 Importar", "📤 Exportar", "↺ Restablecer"):
-            b = Button(text, "default", None, height=32, bold=False)
-            b.configure(state="disabled")
-            tools.addWidget(b)
+        for text, action in (("📥 Importar", self._import_map), ("📤 Exportar", self._export_map), ("↺ Restablecer", self._reset_map)):
+            tools.addWidget(Button(text, "default", action, height=32, bold=False))
         tools.addStretch(1)
         ll.addLayout(tools)
-        row.addWidget(left, 5, Qt.AlignmentFlag.AlignTop)
+        # the left column: the controller and, under it, the layout and camera options
+        left_col = QWidget()
+        left_lay = QVBoxLayout(left_col)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(12)
+        left_lay.addWidget(left)
+        row.addWidget(left_col, 5, Qt.AlignmentFlag.AlignTop)
 
         # right: one row per action
         right, rl = _card("card")
         rl.addWidget(Label("Asignación de botones", "#7fcfa6", 12, bold=True))
-        self.map_note = Label("Elige una acción para ver su botón en el mando.", "#9db3ba", 9.5)
+        self.map_note = Label(MAP_NOTE_IDLE, "#9db3ba", 9.5)
         self.map_note.setWordWrap(True)
         rl.addWidget(self.map_note)
         self.map_chips = {}
@@ -922,8 +928,7 @@ class MH3ULauncherApp(LauncherLogic):
                 line.setSpacing(8)
                 line.addWidget(Label(name, None, 10), 1)
                 chip = Button("Sin asignar", "default", lambda k=key: self._on_map_pick(k), width=150, height=28, bold=False, size=9.5)
-                clear = Button("✕", "default", None, width=34, height=28, bold=False, size=9.5)
-                clear.configure(state="disabled")
+                clear = Button("✕", "default", lambda k=key: self._clear_map_target(k), width=34, height=28, bold=False, size=9.5)
                 line.addWidget(chip)
                 line.addWidget(clear)
                 rl.addLayout(line)
@@ -931,6 +936,17 @@ class MH3ULauncherApp(LauncherLogic):
         rl.addStretch(1)
         row.addWidget(right, 4)
         lay.addLayout(row)
+
+        self.pad_map = padmap.PadMap(self.config.get("pad_map"))
+        self.pad_listener = None
+        self.pad_names = []  # the pads the reader has told about
+        self._map_target = None  # the action waiting for a button (a name of padmap.NAMES)
+        self._map_pressed = set()
+        self._map_deadline = 0.0
+        self._map_timer = QTimer(self.qapp)
+        self._map_timer.setInterval(40)
+        self._map_timer.timeout.connect(self._poll_pad)
+        self._refresh_map_view()
 
         # what was in the graphics tab: layout and camera
         base, bl = _card("card")
@@ -967,22 +983,180 @@ class MH3ULauncherApp(LauncherLogic):
         st.addWidget(self.slider_stick)
         _tip(lbl_stick, "100% es lo que reporta el mando; baja el valor si la cámara se siente demasiado rápida. También se cambia dentro del juego (F2).", self.slider_stick)
         bl.addWidget(stick)
-        lay.addWidget(base)
+        left_lay.addWidget(base)
         lay.addStretch(1)
         return _transparent_scroll(inner)
 
-    def _on_map_pick(self, key):
-        """Selecting an action shows its button on the controller; capturing the real button comes later."""
-        self.pad_diagram.set_active(key)
-        for k, chip in self.map_chips.items():
-            chip.configure(text="Pulsa un botón…" if k == key else "Sin asignar", fg_color="#b8791e" if k == key else "#2b4a58", hover_color="#d4922a" if k == key else "#3b6073")
-        self.map_note.configure(text="La captura de botones se activará en una próxima versión; por ahora la disposición se elige abajo.")
-        QTimer.singleShot(2200, lambda: self._reset_map_chips(key))
+    # ---- the button remapper ----------------------------------------------------------------
+    def _on_tab_changed(self, key):
+        """The pads are read only while the Controls tab shows (and the game is not running)."""
+        if key == TAB_CONTROLS.strip() and not getattr(self, "is_running", False):
+            self._start_pad_listener()
+        else:
+            self._stop_map_capture()
+            self._stop_pad_listener()
+            self._map_timer.stop()
+            self._map_pressed = set()
+            self.pad_diagram.set_pressed(())
 
-    def _reset_map_chips(self, key):
-        if self.pad_diagram.active == key:
-            for chip in self.map_chips.values():
-                chip.configure(text="Sin asignar", fg_color="#2b4a58", hover_color="#3b6073")
+    def _start_pad_listener(self):
+        layout = self.config.get("pad_layout", "xbox")
+        if self.pad_listener is None or self.pad_listener.layout != layout:
+            self._stop_pad_listener()
+            self.pad_listener = padmap.PadListener(self._tools_exe_path(), layout)
+        if self.pad_listener.running or self.pad_listener.start():
+            self._map_timer.start()
+            QTimer.singleShot(3500, self._refresh_map_device)
+            return True
+        self.map_note.configure(text=MAP_NOTE_NO_ENGINE)
+        return False
+
+    def _refresh_map_device(self):
+        names = self.pad_names or ["Ningún mando detectado"]
+        shown = self.opt_map_device.get()
+        self.opt_map_device.set_values(names)
+        self.opt_map_device.set(shown)
+
+    def _poll_pad(self):
+        import time
+
+        listener = self.pad_listener
+        if listener is None:
+            return
+        if self._map_target and time.monotonic() > self._map_deadline:
+            self._stop_map_capture()
+        for kind, value in listener.poll():
+            if kind == "pad":
+                if value not in self.pad_names:
+                    self.pad_names.append(value)
+                    self._refresh_map_device()
+            elif kind == "down":
+                self._map_pressed.add(value)
+                if self._map_target:
+                    self._assign_pressed(value)
+            else:
+                self._map_pressed.discard(value)
+        self.pad_diagram.set_pressed({padmap.ID_OF_NAME[n] for n in self._map_pressed})
+
+    def _on_map_pick(self, key):
+        """An action was picked (in the list or on the controller): the next button pressed on the pad becomes its button."""
+        import time
+
+        if not self._start_pad_listener():
+            return
+        self._map_target = padmap.NAME_OF_ID[key]
+        self._map_deadline = time.monotonic() + 10.0
+        self.pad_diagram.set_active(key)
+        self.map_note.configure(text=MAP_NOTE_ARMED.format(padmap.short(self._map_target)))
+        self._refresh_map_chips()
+
+    def _assign_pressed(self, source):
+        target = self._map_target
+        self._map_target = None
+        self.pad_map.assign(source, target)
+        self._save_pad_map()
+        self.pad_diagram.set_active(None)
+        self.map_note.configure(text=MAP_NOTE_DONE.format(padmap.short(source), padmap.short(target)))
+        self._refresh_map_view()
+
+    def _stop_map_capture(self):
+        if getattr(self, "_map_target", None):
+            self._map_target = None
+            self.pad_diagram.set_active(None)
+            self.map_note.configure(text=MAP_NOTE_IDLE)
+            self._refresh_map_chips()
+
+    def _clear_map_target(self, key):
+        self.pad_map.clear_target(padmap.NAME_OF_ID[key])
+        self._map_target = None
+        self.pad_diagram.set_active(None)
+        self._save_pad_map()
+        self.map_note.configure(text=MAP_NOTE_IDLE)
+        self._refresh_map_view()
+
+    def _reset_map(self):
+        self.pad_map.reset()
+        self._map_target = None
+        self.pad_diagram.set_active(None)
+        self._save_pad_map()
+        self.map_note.configure(text=MAP_NOTE_IDLE)
+        self._refresh_map_view()
+
+    def _save_pad_map(self):
+        self.config["pad_map"] = self.pad_map.to_dict()
+        self.save_config()
+
+    def _refresh_map_view(self):
+        self._refresh_map_chips()
+        self.opt_map_profile.blockSignals(True)
+        if not self.pad_map.is_default():
+            self.opt_map_profile.set("Personalizado")
+        else:
+            self.opt_map_profile.set("Predeterminado (Xbox)" if self.config.get("pad_layout", "xbox") == "xbox" else "Predeterminado (Nintendo)")
+        self.opt_map_profile.blockSignals(False)
+
+    def _refresh_map_chips(self):
+        for key, chip in self.map_chips.items():
+            name = padmap.NAME_OF_ID[key]
+            if name == self._map_target:
+                chip.configure(text="Pulsa un botón…", fg_color="#b8791e", hover_color="#d4922a")
+                continue
+            sources = self.pad_map.sources_of(name)
+            changed = sources != [name]
+            text = "Sin asignar" if not sources else "Botón " + " + ".join(padmap.short(s) for s in sources)
+            if changed and sources:
+                chip.configure(text=text, fg_color="#2f6a52", hover_color="#3b8466")
+            else:
+                chip.configure(text=text, fg_color="#2b4a58", hover_color="#3b6073")
+
+    def _on_map_profile(self):
+        """Default (Xbox) and default (Nintendo) set the layout and drop the changes; Custom is what the table says."""
+        choice = self.opt_map_profile.get()
+        if choice == "Personalizado":
+            self._refresh_map_view()
+            return
+        layout = "xbox" if "Xbox" in choice else "nintendo"
+        if not self.pad_map.is_default() and not qtshim.messagebox.askyesno(
+            "Perfil", "Elegir un perfil predeterminado borra tus cambios de botones. ¿Continuar?"
+        ):
+            self._refresh_map_view()
+            return
+        self.pad_map.reset()
+        self._save_pad_map()
+        self.opt_pad.set("Xbox (A abajo, B der)" if layout == "xbox" else "Nintendo (B abajo, A der)")
+        self.on_pad_changed("Xbox" if layout == "xbox" else "Nintendo")
+        self._refresh_map_view()
+        if self.pad_listener is not None and self.pad_listener.layout != layout:
+            self._start_pad_listener()  # the reader tells the buttons of the new layout
+
+    def _export_map(self):
+        path = qtshim.filedialog.asksaveasfilename(title="Exportar mapa de botones", filter="Mapa de botones (*.json)")
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.pad_map.to_json())
+        except OSError as e:
+            qtshim.messagebox.showerror("Exportar", f"No se pudo guardar el archivo: {e}")
+
+    def _import_map(self):
+        path = qtshim.filedialog.askopenfilename(title="Importar mapa de botones", filter="Mapa de botones (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                imported = padmap.PadMap.from_json(f.read())
+        except OSError as e:
+            qtshim.messagebox.showerror("Importar", f"No se pudo leer el archivo: {e}")
+            return
+        if imported is None:
+            qtshim.messagebox.showerror("Importar", "El archivo no es un mapa de botones de MH3U.")
+            return
+        self.pad_map = imported
+        self._save_pad_map()
+        self._refresh_map_view()
 
     # ---- tab 4 ---------------------------------------------------------------------------------
     def setup_tab_online(self):
