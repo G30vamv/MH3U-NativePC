@@ -16,3 +16,10 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an 
 
 # Bowgun aim (always on): f_028a19b8(hunter) is the per-frame update of a ranged weapon's aim; the hook moves the target pitch from the pad.
 0x028a19b8 aim_pitch          # r3 = hunter
+
+# Camera (always on unless MH3U_ANALOG_CAMERA=off): the camera follows how far the right stick is pushed. Both are f(owner, camera, hunter).
+0x02286f18 camera_turn        # r4 = camera, r5 = hunter: the turn (left/right) from the stick's orders
+0x02286890 camera_pitch       # r4 = camera, r5 = hunter: up/down (six heights on foot, a free tilt in the water)
+
+# Hold to gather (always on unless MH3U_HOLD_GATHER=off): every item carved, gathered or mined goes through the cockpit's "obtained" step.
+0x020eca2c obtain_item        # f_020eca2c(cockpit, _, item, ...): from an item on, a held A reaches the game as presses

@@ -350,7 +350,6 @@ EXACT = {
     '🔴 Juego Base USA (0005000010118300): NO ENCONTRADO': '🔴 USA Base Game (0005000010118300): NOT FOUND',
     '🕹️ Controles y Mandos': '🕹️ Controls & Gamepads',
     '🚀 LTO activado: Compilando con optimización global -flto=thin y nivel -O3...': '🚀 LTO on: building with global optimisation -flto=thin and level -O3...',
-    '🚀 Optimización Inter-archivos LTO (-flto=thin + -O3) para mayor rendimiento en CPU': '🚀 Link-time optimisation LTO (-flto=thin + -O3) for more CPU performance',
     '🛑  DETENER JUEGO': '🛑  STOP GAME',
     '🛠️ Configuración Gráfica': '🛠️ Graphics Settings',
     '🛡️ Respaldar Partidas Ahora': '🛡️ Back Up Saves Now',
@@ -373,6 +372,20 @@ EXACT = {
     'Exportar': 'Export',
     'Importar': 'Import',
     'El archivo no es un mapa de botones de MH3U.': 'The file is not an MH3U button map.',
+    'Límite de FPS:': 'FPS limit:',
+    'Límite de FPS': 'FPS limit',
+    'Sin límite': 'No limit',
+    'El tope de fotogramas por segundo, en múltiplos de los 30 de la consola. Con un tope tu PC trabaja menos y, al jugar online, todos van a un ritmo parecido. Con más FPS el juego se ve más fluido, pero no va más rápido. También se cambia dentro del juego (F2).': "The most frames per second, in multiples of the console's 30. With a limit your PC works less and, when you play online, everyone runs at a similar pace. More FPS make the game look smoother, not run faster. You can also change it inside the game (F2).",
+    'El ritmo original de la consola. Es lo que menos le exige a tu PC.': "The console's original pace. The lightest choice for your PC.",
+    'Fluido y estable. Una buena opción para jugar online con amigos.': 'Smooth and steady. A good choice to play online with friends.',
+    'Sin tope: tantos FPS como dé tu PC (como hasta ahora).': 'No cap: as many FPS as your PC can give (as it was until now).',
+    '💡 Compilación optimizada (LTO)': '💡 Optimised build (LTO)',
+    'Optimiza más el juego al compilarlo. La compilación tarda bastante más y puede dar algunos FPS extra en procesadores poco potentes (no está medido; en un PC rápido no se nota). Vale para la próxima vez que compiles el juego.': 'Optimises the game further when it is built. The build takes quite a bit longer and may give a few extra FPS on slower processors (not measured; on a fast PC you will not notice). It applies the next time you build the game.',
+    'Cámara suave con el stick derecho': 'Smooth camera with the right stick',
+    'La cámara gira y sube o baja según cuánto empujes el stick: un poco para moverla despacio, a fondo para moverla rápido. Desactívalo para volver a la cámara original del juego, que se mueve a saltos como con botones.': "The camera turns and goes up or down by how far you push the stick: a little to move it slowly, all the way to move it fast. Turn it off to go back to the game's original camera, which moves in steps as if with buttons.",
+    'Relay del servidor (solo si creas la sala):': 'Server relay (only if you create the room):',
+    'Auto': 'Auto',
+    'Cómo viajan los datos entre quien crea la sala y sus invitados.\nAuto (recomendado): conexión directa, y el servidor hace de puente solo si la directa falla.\nActivado: siempre a través del servidor; pruébalo si un invitado no logra entrar o se desconecta.\nDesactivado: nunca; solo conexión directa.\nEntre invitados la conexión es siempre directa. Con Radmin VPN o parecidas no hace falta tocarlo.': 'How the data travels between whoever creates the room and their guests.\nAuto (recommended): a direct connection, and the server bridges it only if the direct one fails.\nOn: always through the server; try it if a guest cannot get in or gets disconnected.\nOff: never; direct connection only.\nBetween guests the connection is always direct. With Radmin VPN and the like you do not need to touch it.',
 }
 
 # texts with a value inside: "{}" stands for it, in the same order in both languages
@@ -471,4 +484,5 @@ TEMPLATES = [
     ('Botón {}', 'Button {}'),
     ('No se pudo guardar el archivo: {}', 'The file could not be saved: {}'),
     ('No se pudo leer el archivo: {}', 'The file could not be read: {}'),
+    ('Para pantallas de {} Hz.', 'For {} Hz screens.'),
 ]

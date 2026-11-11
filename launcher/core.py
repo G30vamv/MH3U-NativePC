@@ -42,7 +42,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.15"
+APP_VERSION = "v0.9.16"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -174,6 +174,46 @@ INGAME_SETTINGS_FILE = "ingame_settings.txt"
 UI_LANGUAGES = ("auto", "es", "en")
 
 
+# The frame limit (Graphics tab and the game's F2 window): multiples of the console's 30 frames a second; 0 = no limit.
+FPS_LIMITS = (30, 60, 90, 120, 150, 180, 210, 240)
+FPS_NO_LIMIT = "Sin límite"
+
+
+def fps_limit_of(config):
+    """The frame limit of a configuration: one of FPS_LIMITS, else 0 (no limit)."""
+    try:
+        value = int(config.get("fps_limit", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value in FPS_LIMITS else 0
+
+
+def fps_limit_label(value):
+    """What the list shows for a limit ("60 FPS", "Sin límite")."""
+    return f"{value} FPS" if value in FPS_LIMITS else FPS_NO_LIMIT
+
+
+def fps_limit_from_label(label):
+    """The limit a list entry stands for (0 for no limit or anything else)."""
+    try:
+        value = int(str(label).split()[0])
+    except (IndexError, ValueError):
+        return 0
+    return value if value in FPS_LIMITS else 0
+
+
+def fps_limit_tips():
+    """The explanation of each entry of the list."""
+    tips = {
+        fps_limit_label(30): "El ritmo original de la consola. Es lo que menos le exige a tu PC.",
+        fps_limit_label(60): "Fluido y estable. Una buena opción para jugar online con amigos.",
+        FPS_NO_LIMIT: "Sin tope: tantos FPS como dé tu PC (como hasta ahora).",
+    }
+    for fps in FPS_LIMITS[2:]:
+        tips[fps_limit_label(fps)] = f"Para pantallas de {fps} Hz."
+    return tips
+
+
 def system_ui_language():
     """'es' or 'en' from the Windows display language ('en' for anything else)."""
     try:
@@ -218,6 +258,12 @@ def read_ingame_settings(path):
         stick = int(raw["right_stick_sens"])
         if 25 <= stick <= 150:
             found["right_stick_sens"] = stick
+    except (KeyError, ValueError):
+        pass
+    try:
+        limit = int(raw["fps_limit"])
+        if limit == 0 or limit in FPS_LIMITS:
+            found["fps_limit"] = limit
     except (KeyError, ValueError):
         pass
     try:
@@ -673,6 +719,8 @@ class LauncherLogic:
             "gpu_thread": "auto",
             "ui_language": "auto",
             "right_stick_sens": 100,
+            "fps_limit": 0,  # the most frames a second (one of FPS_LIMITS); 0 = no limit
+            "analog_camera": True,  # the camera follows how far the right stick is pushed (off: the game's own camera)
             # Cheats section (off until the player turns it on and reads the warning)
             "cheats_enabled": False,
             "cheats_warned": False,
@@ -918,6 +966,23 @@ class LauncherLogic:
         self.save_config()
         self.lbl_quick_scale.configure(text=f"Resolución: {value}")
 
+    def on_fps_limit_changed(self, value):
+        self.config["fps_limit"] = fps_limit_from_label(value)
+        self.save_config()
+
+    def on_analog_camera_toggled(self):
+        self.config["analog_camera"] = bool(self.chk_analog_camera.get())
+        self.save_config()
+
+    def on_relay_changed(self, value):
+        """The Online tab's relay choice: Auto / Activado / Desactivado (MH3U_RELAY of the host's server)."""
+        self.config["online_relay"] = "force" if value.startswith("Activ") else "off" if value.startswith("Desactiv") else "auto"
+        self.save_config()
+
+    def on_lto_toggled(self):
+        self.config["build_lto"] = bool(self.chk_lto.get())
+        self.save_config()
+
     def on_pad_changed(self, value):
         self.config["pad_layout"] = "xbox" if "Xbox" in value else "nintendo"
         self.save_config()
@@ -1072,8 +1137,6 @@ class LauncherLogic:
         self.config["audio"] = bool(self.chk_audio.get())
         self.config["audio_fx"] = bool(self.chk_audio_fx.get())
         self.config["overlay"] = bool(self.chk_overlay.get())
-        if hasattr(self, "chk_lto"):
-            self.config["build_lto"] = bool(self.chk_lto.get())
         if hasattr(self, "chk_discord_rpc"):
             self.config["discord_rpc"] = bool(self.chk_discord_rpc.get())
         self.save_config()
@@ -2239,6 +2302,12 @@ class LauncherLogic:
         # Language of the game's overlay and where it keeps the settings changed there
         env["MH3U_UI_LANG"] = self.language()
         env["MH3U_RIGHT_STICK_SENS"] = str(int(self.config.get("right_stick_sens", 100)))
+        limit = fps_limit_of(self.config)
+        if limit:
+            env["MH3U_FPS_LIMIT"] = str(limit)
+        if not self.config.get("analog_camera", True):
+            env["MH3U_ANALOG_CAMERA"] = "off"
+
         env["MH3U_INGAME_SETTINGS"] = os.path.join(base_dir, INGAME_SETTINGS_FILE)
 
         # Online hooks environment preparation

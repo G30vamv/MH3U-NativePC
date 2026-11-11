@@ -1,0 +1,142 @@
+diff --git a/crates/mh3u-rt/src/gather.rs b/crates/mh3u-rt/src/gather.rs
+new file mode 100644
+index 0000000..9cb05ba
+--- /dev/null
++++ b/crates/mh3u-rt/src/gather.rs
+@@ -0,0 +1,34 @@
++//! Hold to gather (`MH3U_HOLD_GATHER=off` turns it off). Carving, gathering and mining give one item for each press of A. Every
++//! item got that way goes through `obtain_item`, `f_020eca2c` (the cockpit's "obtained" step; read with Ghidra, `docs/ghidra.md`).
++//! From an item on, an A that is kept held reaches the game as presses (`input::repeat_a`), as a hand tapping would, until A is
++//! let go or a few seconds pass with no other item (the spot is used up).
++
++use crate::hooks::{Callback, Hook, Registry};
++use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
++use std::time::Duration;
++
++/// How long after an item a held A keeps repeating (carving one takes about two seconds; a large monster keeps the hunter busy
++/// for longer before the next carve can start).
++const GATHER_FOR: Duration = Duration::from_millis(6000);
++
++/// Registers it (nothing when it is off or the build lacks the hook).
++pub fn register(r: &mut Registry) {
++    if !crate::input::switch_setting(std::env::var("MH3U_HOLD_GATHER").ok().as_deref(), true) {
++        eprintln!("[gather] one press for each item, as the game has it (MH3U_HOLD_GATHER=off)");
++    } else if r.on("obtain_item", obtained()) {
++        eprintln!("[gather] holding A keeps carving, gathering and mining (MH3U_HOLD_GATHER=off turns it off)");
++    } else {
++        eprintln!("[gather] holding A to gather needs the hook obtain_item: build the game again with the launcher's current mods/hooks.txt");
++    }
++}
++
++fn obtained() -> Callback {
++    let n = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        crate::input::repeat_a(GATHER_FOR);
++        let k = n.fetch_add(1, Relaxed);
++        if k < 3 || k % 200 == 0 {
++            eprintln!("[gather] item {:#x} (time {}): a held A repeats for {} ms", h.ctx.r[5], k + 1, GATHER_FOR.as_millis());
++        }
++    })
++}
+diff --git a/crates/mh3u-rt/src/input.rs b/crates/mh3u-rt/src/input.rs
+index a9450fd..452d362 100644
+--- a/crates/mh3u-rt/src/input.rs
++++ b/crates/mh3u-rt/src/input.rs
+@@ -332,6 +332,32 @@ pub static FOCUSED: AtomicBool = AtomicBool::new(true);
+ /// default and lives in the window (`mh3u-gfx`).
+ pub static BACKGROUND_PADS: AtomicBool = AtomicBool::new(true);
+ 
++/// Until when (milliseconds of [`clock_ms`], 0 = never asked) a held A reaches the game as presses (`gather.rs`: hold to gather).
++static REPEAT_A_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++/// A held A that repeats is given for this long and then let go for this long (more than a frame of the game at 30 a second).
++const REPEAT_ON_MS: u64 = 110;
++const REPEAT_OFF_MS: u64 = 70;
++
++/// Milliseconds since the first call.
++fn clock_ms() -> u64 {
++    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
++    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
++}
++
++/// From now and for `time`, an A that is kept held reaches the game as presses, as a hand tapping would.
++pub fn repeat_a(time: std::time::Duration) {
++    REPEAT_A_UNTIL.store(clock_ms() + time.as_millis() as u64, Relaxed);
++}
++
++/// The buttons the game gets at `now` when a held A repeats until `until`: A is let go for a moment every so often.
++fn repeated(buttons: u32, now: u64, until: u64) -> u32 {
++    if buttons & button::A != 0 && now < until && now % (REPEAT_ON_MS + REPEAT_OFF_MS) >= REPEAT_ON_MS {
++        buttons & !button::A
++    } else {
++        buttons
++    }
++}
++
+ /// An on/off setting: `1`, `on`, `true` or `yes` is on, `0`, `off`, `false` or `no` is off, and anything else (or nothing) is
+ /// `default`.
+ pub fn switch_setting(value: Option<&str>, default: bool) -> bool {
+@@ -518,7 +544,13 @@ impl Input {
+         // the right stick's direction buttons follow the stick as it is pushed, not as scaled: with a low sensitivity the scaled stick
+         // never gets as far as the buttons' threshold
+         let all = self.keyboard.load(Relaxed) | pad | stick_buttons(s[0], s[1], true) | stick_buttons(right.0, right.1, false);
+-        all & !SWALLOWED.load(Relaxed)
++        let all = all & !SWALLOWED.load(Relaxed);
++        // an A let go ends the repeating a gathered item asked for (`gather.rs`), so the next hold is a plain one
++        let until = REPEAT_A_UNTIL.load(Relaxed);
++        if until != 0 && all & button::A == 0 {
++            REPEAT_A_UNTIL.store(0, Relaxed);
++        }
++        repeated(all, clock_ms(), until)
+     }
+ 
+     /// The gamepads' buttons as the pads gave them: not remapped, and whether or not the window has the focus (`padmap::listen`).
+@@ -870,6 +902,24 @@ mod background {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn a_held_a_repeats_only_while_asked_and_only_a() {
++        let held = button::A | button::B;
++        // not asked, or the time is over: held as it is
++        assert!((0..400).all(|now| repeated(held, now, 0) == held));
++        assert!((1000..1400).all(|now| repeated(held, now, 1000) == held));
++        // asked: A comes and goes, several presses a second, and B stays
++        let seen: Vec<u32> = (0..1000).map(|now| repeated(held, now, 5000)).collect();
++        assert!(seen.iter().all(|b| b & button::B != 0));
++        let presses = seen.windows(2).filter(|w| w[0] & button::A == 0 && w[1] & button::A != 0).count();
++        assert!((4..=7).contains(&presses), "{presses}");
++        // each let-go lasts longer than two frames at 30 a second would need to be seen
++        assert!(REPEAT_OFF_MS >= 67);
++        assert_eq!(seen.iter().filter(|b| *b & button::A == 0).count() as u64, 5 * REPEAT_OFF_MS);
++        // without A nothing changes
++        assert!((0..400).all(|now| repeated(button::B, now, 5000) == button::B));
++    }
++
+     #[test]
+     fn background_gamepads_are_on_by_default_and_keep_the_pads_without_the_focus() {
+         assert!(switch_setting(None, true));
+diff --git a/crates/mh3u-rt/src/lib.rs b/crates/mh3u-rt/src/lib.rs
+index 718b32d..6392ef5 100644
+--- a/crates/mh3u-rt/src/lib.rs
++++ b/crates/mh3u-rt/src/lib.rs
+@@ -19,6 +19,7 @@ pub fn new_test_ctx() -> Ctx {
+ }
+ pub mod camera;
+ pub mod cheats;
++pub mod gather;
+ 
+ pub mod combat;
+ pub mod input;
+diff --git a/crates/mh3u-tools/src/main.rs b/crates/mh3u-tools/src/main.rs
+index 031a94b..6f2ccde 100644
+--- a/crates/mh3u-tools/src/main.rs
++++ b/crates/mh3u-tools/src/main.rs
+@@ -950,6 +950,8 @@ fn run_game(dump: &Dump, c_dir: &Path, max_imports: u64, save: PathBuf, window:
+         mh3u_rt::cheats::register(&mut registry);
+         // the camera follows how far the right stick is pushed (MH3U_ANALOG_CAMERA=off: the game's own)
+         mh3u_rt::camera::register(&mut registry);
++        // holding A keeps carving, gathering and mining (MH3U_HOLD_GATHER=off: a press for each item)
++        mh3u_rt::gather::register(&mut registry);
+         mh3u_rt::hooks::install(registry);
+ 
+     } else {

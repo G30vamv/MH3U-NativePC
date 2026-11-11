@@ -177,10 +177,30 @@ def _relaunch_command():
     return f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
 
 
+def prune_backups(base_dir, keep=1):
+    """Removes the backups of older updates (`_update_backup/<version>/`), keeping the `keep` newest: each update left its own
+    folder behind (about 60 MB when the game's program changed) and nothing ever took them away. Gives the folders removed."""
+    root = os.path.join(base_dir, BACKUP_DIR)
+    try:
+        folders = [e for e in os.scandir(root) if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return []
+    folders.sort(key=lambda e: (e.stat().st_mtime, parse_version(e.name)), reverse=True)
+    removed = []
+    for entry in folders[max(keep, 0):]:
+        try:
+            shutil.rmtree(entry.path)
+            removed.append(entry.name)
+        except OSError:
+            pass
+    return removed
+
+
 def write_apply_script(todo, base_dir, version):
     """Create apply_update.bat (CRLF). It waits for this process, swaps files, rolls back on failure."""
     stage = os.path.join(base_dir, UPDATE_DIR)
-    backup = os.path.join(base_dir, BACKUP_DIR, str(version))
+    backups = os.path.join(base_dir, BACKUP_DIR)
+    backup = os.path.join(backups, str(version))
     lines = [
         "@echo off",
         "chcp 65001 >nul",
@@ -195,8 +215,10 @@ def write_apply_script(todo, base_dir, version):
         '"{S32}taskkill.exe" /F /IM server.exe >nul 2>&1'.replace('{S32}', S32),
         '"{S32}ping.exe" -n 4 127.0.0.1 >nul'.replace('{S32}', S32),
         "echo [%date% %time%] apply_update: aplicando archivos",
-        f'if exist "{backup}" rmdir /S /Q "{backup}"',
+        # only the files this update replaces are kept (to go back one version): the backups of older updates go
+        f'if exist "{backups}" rmdir /S /Q "{backups}"',
         f'mkdir "{backup}"',
+
         "set FAIL=0",
     ]
     for e in todo:

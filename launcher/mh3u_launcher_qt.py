@@ -37,7 +37,12 @@ from core import (
     MODS,
     mod_enabled,
     DEFAULT_OUT_DIR,
+    FPS_LIMITS,
+    FPS_NO_LIMIT,
     LauncherLogic,
+    fps_limit_label,
+    fps_limit_of,
+    fps_limit_tips,
     get_assets_dir,
     get_base_dir,
     gpu_thread_mode,
@@ -210,6 +215,9 @@ class MH3ULauncherApp(LauncherLogic):
             self.window.setWindowIcon(QIcon(icon_path))
         self.window.resize(1180, 840)
         self.window.setMinimumSize(980, 680)
+        # in the middle of the main screen (Windows would open it on the screen the mouse is on), and its dialogs over it
+        qtshim.center_on_primary(self.window)
+        qtshim.set_main_window(self.window)
 
         self.acrylic = bool(self.config.get("acrylic", False)) and winfx.acrylic_available()
         if self.acrylic:
@@ -225,6 +233,9 @@ class MH3ULauncherApp(LauncherLogic):
         self.poll.timeout.connect(self._process_ui_queue)
         self.poll.start(50)
         self.refresh_status()
+        if updater:
+            # the backups of older updates piled up next to the launcher: only the last one stays
+            threading.Thread(target=updater.prune_backups, args=(get_base_dir(),), daemon=True).start()
         if updater and self.config.get("auto_check_updates", True):
             QTimer.singleShot(4000, lambda: self.check_for_updates(silent=True))
 
@@ -259,6 +270,7 @@ class MH3ULauncherApp(LauncherLogic):
         upscaler_map = {"fsr": "FSR 1.0 (EASU + RCAS)", "cas": "AMD CAS (Solo Nitidez)", "off": "Desactivado (Nativo)"}
         self.opt_scale.set(scale_map.get(str(c.get("scale", "2")), "2x (1440p 2K)"))
         self.opt_present.set(present_map.get(c.get("present_mode", "mailbox"), "Mailbox (Fast-Sync)"))
+        self.opt_fps_limit.set(fps_limit_label(fps_limit_of(c)))
         self.opt_upscaler.set(upscaler_map.get(c.get("upscaler", "fsr"), "FSR 1.0 (EASU + RCAS)"))
         sharp = c.get("fsr_sharpness", 75)
         self.slider_sharpness.set(sharp)
@@ -433,6 +445,15 @@ class MH3ULauncherApp(LauncherLogic):
             self.on_auto_updates_toggled,
             qtanim.tip_html("Al abrir el launcher comprueba si hay una versión nueva y te avisa. No instala nada sin preguntarte."),
         )
+        self.chk_lto = self.menu.add_switch(
+            "💡 Compilación optimizada (LTO)",
+            bool(self.config.get("build_lto", False)),
+            self.on_lto_toggled,
+            qtanim.tip_html(
+                "Optimiza más el juego al compilarlo. La compilación tarda bastante más y puede dar algunos FPS extra en procesadores "
+                "poco potentes (no está medido; en un PC rápido no se nota). Vale para la próxima vez que compiles el juego."
+            ),
+        )
         self.menu.add_separator()
         self.menu.add_action("🔄  Buscar actualizaciones ahora", self.on_update_button)
         gear.clicked.connect(self.open_menu)
@@ -551,7 +572,7 @@ class MH3ULauncherApp(LauncherLogic):
         self._quick_items = [
             ("scale", "Resolución interna"), ("upscaler", "Reescalado"), ("present", "VSync"), ("backend", "API gráfica"),
             ("window", "Pantalla"), ("fps", "Contador de FPS"), ("input", "Entrada"), ("layout", "Disposición del mando"),
-            ("sens", "Sensibilidad de cámara"), ("mods", "Mods"), ("audio", "Audio"), ("lto", "Compilación LTO"),
+            ("sens", "Sensibilidad de cámara"), ("mods", "Mods"), ("audio", "Audio"), ("fpslimit", "Límite de FPS"),
             ("online", "Online"), ("discord", "Discord Rich Presence"),
         ]
         self._quick_labels = {}
@@ -629,7 +650,7 @@ class MH3ULauncherApp(LauncherLogic):
             "sens": (str(int(round(float(c.get("mouse_sensitivity", 0.0008)) * 10000))), plain),
             "mods": (", ".join(mods), green) if mods else ("Desactivados", grey),
             "audio": (" · ".join(audio), green) if audio else ("Silenciado", grey),
-            "lto": yes(c.get("build_lto", False)),
+            "fpslimit": (fps_limit_label(fps_limit_of(c)), gold if fps_limit_of(c) else grey),
             "online": (online, online_color),
             "discord": yes(c.get("discord_rpc", True), "Activado", "Desactivado"),
         }
@@ -672,10 +693,6 @@ class MH3ULauncherApp(LauncherLogic):
         self.btn_download_toolchain = Button("⬇️ Descargar Clang Portátil", "default", self.start_download_toolchain, width=200, height=44)
         btn_row.addWidget(self.btn_download_toolchain)
         bx.addLayout(btn_row)
-        self.chk_lto = CheckBox("🚀 Optimización Inter-archivos LTO (-flto=thin + -O3) para mayor rendimiento en CPU", self.save_settings_from_ui)
-        if self.config.get("build_lto", False):
-            self.chk_lto.select()
-        bx.addWidget(self.chk_lto)
         self.progress_bar = ProgressBar(10)
         bx.addWidget(self.progress_bar)
         bx.addWidget(Label("Registro del compilador en tiempo real:", None, 10))
@@ -709,6 +726,20 @@ class MH3ULauncherApp(LauncherLogic):
             "1x (720p): nativo, 60 FPS seguros.\n2x (1440p): 4x píxeles, nítido en monitores 1080p/1440p.\n"
             "3x (4K UHD): 9x píxeles.\n4x (5K): 16x píxeles (GPUs potentes).",
             self.opt_scale,
+        )
+
+        lbl_fps_limit = Label("Límite de FPS:", None, 10.5, bold=True)
+        g.addWidget(lbl_fps_limit)
+        self.opt_fps_limit = qtmenu.DropList(
+            [fps_limit_label(v) for v in FPS_LIMITS] + [FPS_NO_LIMIT], self.on_fps_limit_changed, fps_limit_tips()
+        )
+        self.opt_fps_limit.set(fps_limit_label(fps_limit_of(self.config)))
+        g.addWidget(self.opt_fps_limit)
+        _tip(
+            lbl_fps_limit,
+            "El tope de fotogramas por segundo, en múltiplos de los 30 de la consola. Con un tope tu PC trabaja menos y, al jugar online, "
+            "todos van a un ritmo parecido. Con más FPS el juego se ve más fluido, pero no va más rápido. También se cambia dentro del juego (F2).",
+            self.opt_fps_limit,
         )
 
         self.chk_fullscreen = CheckBox("Pantalla Completa sin bordes (Borderless)", self.save_settings_from_ui)
@@ -982,6 +1013,15 @@ class MH3ULauncherApp(LauncherLogic):
         self.slider_stick.set(raw_stick)
         st.addWidget(self.slider_stick)
         _tip(lbl_stick, "100% es lo que reporta el mando; baja el valor si la cámara se siente demasiado rápida. También se cambia dentro del juego (F2).", self.slider_stick)
+        self.chk_analog_camera = CheckBox("Cámara suave con el stick derecho", self.on_analog_camera_toggled)
+        if self.config.get("analog_camera", True):
+            self.chk_analog_camera.select()
+        st.addWidget(self.chk_analog_camera)
+        _tip(
+            self.chk_analog_camera,
+            "La cámara gira y sube o baja según cuánto empujes el stick: un poco para moverla despacio, a fondo para moverla rápido. "
+            "Desactívalo para volver a la cámara original del juego, que se mueve a saltos como con botones.",
+        )
         bl.addWidget(stick)
         left_lay.addWidget(base)
         lay.addStretch(1)
@@ -1199,6 +1239,20 @@ class MH3ULauncherApp(LauncherLogic):
             self.chk_separate_save,
             "Usa una carpeta de partidas propia (partidas_aparte, junto al launcher) en vez de la normal. Así el puerto y Cemu en el mismo PC "
             "pueden tener cazadores con nombres distintos y no chocan en la sala. Empiezas con un cazador nuevo; la partida de siempre no se toca.",
+        )
+        lbl_relay = Label("Relay del servidor (solo si creas la sala):", "#9db3ba", 10, bold=True)
+        tl.addWidget(lbl_relay)
+        self.seg_relay = Segmented(["Auto", "Activado", "Desactivado"], self.on_relay_changed)
+        self.seg_relay.set({"force": "Activado", "off": "Desactivado"}.get(str(self.config.get("online_relay", "auto")).lower(), "Auto"))
+        tl.addWidget(self.seg_relay)
+        _tip(
+            lbl_relay,
+            "Cómo viajan los datos entre quien crea la sala y sus invitados.\n"
+            "Auto (recomendado): conexión directa, y el servidor hace de puente solo si la directa falla.\n"
+            "Activado: siempre a través del servidor; pruébalo si un invitado no logra entrar o se desconecta.\n"
+            "Desactivado: nunca; solo conexión directa.\n"
+            "Entre invitados la conexión es siempre directa. Con Radmin VPN o parecidas no hace falta tocarlo.",
+            self.seg_relay,
         )
         diag_row = QHBoxLayout()
         btn_diag = Button("🩺 Diagnóstico de Red", "default", self.run_diagnostics, width=190)

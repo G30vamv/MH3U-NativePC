@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
+## [0.9.16] - 2026-11-10
+
+### Added
+- **A smooth camera with the right stick.** The camera now turns and goes up or down by how far you push the stick: a little to move it slowly, all the way to move it fast, in any direction. Before, it moved in steps, as if the stick were buttons. If you prefer the game's original camera, turn off "Smooth camera with the right stick" in the Controls tab. The game is built again the first time you press PLAY.
+- **The bowgun's aim follows the stick too.** With the smooth camera on, the sight goes up and down by how far you push the stick, slowly or fast, and at the same speed whatever your FPS.
+- **Hold to gather.** Keep the button held on a carcass, a gathering spot or a mining point and the hunter keeps carving, gathering or mining until the spot is used up, instead of one press for each item.
+- **An FPS limit.** A new list under the resolution in the Graphics tab (and in the game's F2 window) lets you cap the game at 30, 60, 90... up to 240 FPS, or leave it without a limit as before. With a cap your PC works less, and online everyone runs at a similar pace.
+- **The server relay can be chosen in the Online tab** (Auto, On, Off) when you create a room. Auto is still the default.
+
+### Fixed
+- **The bowgun keeps its aim when you shoot.** The sight used to drop back to the middle with every shot.
+- **Old update backups no longer pile up** next to the launcher (about 60 MB each). Only the last one is kept, and the old ones are cleared when the launcher opens.
+- **The launcher opens in the middle of your main screen**, and its messages open over it, instead of wherever the mouse was.
+
+### Changed
+- The LTO build option moved to the gear's menu (it is still off by default).
+- Leftovers of an old way of connecting online that was no longer used were removed from the game's program.
+
 ## [0.9.15] - 2026-11-09
 
 ### Fixed

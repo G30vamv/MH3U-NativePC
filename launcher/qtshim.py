@@ -9,7 +9,7 @@ import threading
 import i18n
 import qtanim
 from PySide6.QtCore import QEasingCurve, QObject, QPointF, QRectF, QSize, Qt, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
@@ -99,6 +99,62 @@ def init_threading():
     _main = _MainThread()
 
 
+_main_window = None
+
+
+def set_main_window(window):
+    """The launcher's window: its dialogs open centred over it."""
+    global _main_window
+    _main_window = window
+
+
+def _dialog_parent():
+    """The launcher's window while it is on screen (a dialog of a hidden or minimized window would not be seen)."""
+    w = _main_window
+    return w if w is not None and w.isVisible() and not w.isMinimized() else None
+
+
+def centered_origin(size, area):
+    """Where the top left corner of something `size` (w, h) goes to sit in the middle of `area` (x, y, w, h), without leaving it by
+    the top or the left when it is bigger."""
+    (w, h), (ax, ay, aw, ah) = size, area
+    return ax + max((aw - w) // 2, 0), ay + max((ah - h) // 2, 0)
+
+
+def center_on_primary(widget):
+    """Puts a window in the middle of the main screen (not where the mouse happens to be)."""
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    a = screen.availableGeometry()
+    widget.move(*centered_origin((widget.width(), widget.height()), (a.x(), a.y(), a.width(), a.height())))
+
+
+def center_dialog(dialog, fit=True):
+    """A dialog opens in the middle of the launcher's window, or of the main screen when the window is not on screen; always
+    whole inside the screen it lands on. `fit` first gives it the size its contents ask for."""
+    dialog.ensurePolished()
+    if fit:
+        dialog.adjustSize()
+    size = (dialog.width(), dialog.height())
+    over = _dialog_parent()
+    if over is None:
+        center_on_primary(dialog)
+        return
+    g = over.frameGeometry()
+    x, y = centered_origin(size, (g.x(), g.y(), g.width(), g.height()))
+    if size[0] > g.width():
+        x = g.x() - (size[0] - g.width()) // 2
+    if size[1] > g.height():
+        y = g.y() - (size[1] - g.height()) // 2
+    screen = QGuiApplication.screenAt(g.center()) or QGuiApplication.primaryScreen()
+    if screen is not None:
+        a = screen.availableGeometry()
+        x = max(a.x(), min(x, a.x() + a.width() - size[0]))
+        y = max(a.y(), min(y, a.y() + a.height() - size[1]))
+    dialog.move(x, y)
+
+
 def _box(kind, title, text, buttons=QMessageBox.StandardButton.Ok, names=None):
     def show():
         box = QMessageBox(kind, i18n.t(str(title)), i18n.t(str(text)), buttons)
@@ -116,6 +172,7 @@ def _box(kind, title, text, buttons=QMessageBox.StandardButton.Ok, names=None):
             b = box.button(which)
             if b is not None:
                 b.setText(i18n.t(label))
+        center_dialog(box)
         return box.exec()
 
     return on_main(show)
@@ -168,6 +225,7 @@ def license_dialog(title, intro, text, accept="Acepto y descargar", decline="Can
         row.addWidget(no)
         row.addWidget(yes)
         lay.addLayout(row)
+        center_dialog(dlg, fit=False)
         return dlg.exec() == QDialog.DialogCode.Accepted
 
     return on_main(show)
@@ -176,15 +234,16 @@ def license_dialog(title, intro, text, accept="Acepto y descargar", decline="Can
 class filedialog:  # noqa: N801
     @staticmethod
     def askdirectory(title="", initialdir=""):
-        return on_main(lambda: QFileDialog.getExistingDirectory(None, title, initialdir)) or ""
+        return on_main(lambda: QFileDialog.getExistingDirectory(_dialog_parent(), title, initialdir)) or ""
 
     @staticmethod
     def askopenfilename(title="", initialdir="", filter=""):  # noqa: A002
-        return on_main(lambda: QFileDialog.getOpenFileName(None, title, initialdir, filter)[0]) or ""
+        return on_main(lambda: QFileDialog.getOpenFileName(_dialog_parent(), title, initialdir, filter)[0]) or ""
 
     @staticmethod
     def asksaveasfilename(title="", initialdir="", filter=""):  # noqa: A002
-        return on_main(lambda: QFileDialog.getSaveFileName(None, title, initialdir, filter)[0]) or ""
+        return on_main(lambda: QFileDialog.getSaveFileName(_dialog_parent(), title, initialdir, filter)[0]) or ""
+
 
 
 def font(size=None, bold=False, family=None, pixel=False):

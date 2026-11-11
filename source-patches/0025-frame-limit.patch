@@ -1,0 +1,251 @@
+diff --git a/crates/mh3u-gfx/src/front.rs b/crates/mh3u-gfx/src/front.rs
+index 0dab850..05ceb2e 100644
+--- a/crates/mh3u-gfx/src/front.rs
++++ b/crates/mh3u-gfx/src/front.rs
+@@ -639,7 +639,9 @@ impl Front {
+                 self.forward(g, *rec);
+             }
+             Call::SwapScanBuffers => {
++                crate::settings::pace(true);
+                 if let Back::Thread { pending, .. } = &self.back {
++
+                     *pending.0.lock().unwrap() += 1;
+                 }
+                 self.forward(g, *rec);
+diff --git a/crates/mh3u-gfx/src/gx2.rs b/crates/mh3u-gfx/src/gx2.rs
+index 3c61d87..56c3891 100644
+--- a/crates/mh3u-gfx/src/gx2.rs
++++ b/crates/mh3u-gfx/src/gx2.rs
+@@ -415,6 +415,8 @@ impl Gx2 {
+             caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0])
+         });
+         let live = crate::settings::Live::from_env();
++        crate::settings::set_fps_limit(live.fps_limit);
++
+         mh3u_rt::input::set_right_stick_gain(live.right_stick as f32 / 100.0);
+         let requested_mode = wgpu_present_mode(live.present);
+         let present_mode = choose_present_mode(requested_mode, caps.as_ref().map(|c| c.present_modes.as_slice()));
+@@ -1330,6 +1332,7 @@ impl Gx2 {
+             Call::ClearColor => self.clear(g, c),
+             Call::CopyColorBufferToScanBuffer => self.copy_to_scan_buffer(g, c),
+             Call::SwapScanBuffers => {
++                crate::settings::pace(false);
+                 self.present();
+                 self.swaps += 1;
+                 mh3u_rt::FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+diff --git a/crates/mh3u-gfx/src/overlay.rs b/crates/mh3u-gfx/src/overlay.rs
+index 8ce9d97..e8d3543 100644
+--- a/crates/mh3u-gfx/src/overlay.rs
++++ b/crates/mh3u-gfx/src/overlay.rs
+@@ -637,6 +637,20 @@ impl Overlay {
+                         });
+                     ui.end_row();
+ 
++                    ui.label(l.p("Frame limit", "Límite de FPS"));
++                    let limit = |fps: u32| match fps {
++                        0 => l.p("No limit", "Sin límite").to_string(),
++                        fps => format!("{fps} FPS"),
++                    };
++                    egui::ComboBox::from_id_salt("fps_limit")
++                        .selected_text(limit(live.fps_limit))
++                        .show_ui(ui, |ui| {
++                            for fps in settings::FPS_LIMITS.into_iter().chain([0]) {
++                                ui.selectable_value(&mut live.fps_limit, fps, limit(fps));
++                            }
++                        });
++                    ui.end_row();
++
+                     ui.label(l.p("FPS counter", "Contador de FPS"));
+                     ui.checkbox(&mut live.fps_counter, "");
+                     ui.end_row();
+@@ -691,8 +705,10 @@ impl Overlay {
+             let gfx = (live.upscaler, live.sharpness, live.present, live.scale)
+                 != (self.live.upscaler, self.live.sharpness, self.live.present, self.live.scale);
+             self.fps_enabled = live.fps_counter;
++            settings::set_fps_limit(live.fps_limit);
+             self.live = live;
+             if gfx {
++
+                 settings::request(live);
+             }
+             settings::save(&self.settings_file, &live);
+diff --git a/crates/mh3u-gfx/src/settings.rs b/crates/mh3u-gfx/src/settings.rs
+index 8567853..df2b0fb 100644
+--- a/crates/mh3u-gfx/src/settings.rs
++++ b/crates/mh3u-gfx/src/settings.rs
+@@ -8,7 +8,8 @@
+ 
+ use std::path::{Path, PathBuf};
+ use std::sync::Mutex;
+-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
++use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
++use std::time::{Duration, Instant};
+ 
+ /// The language of the overlay's text.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+@@ -121,6 +122,86 @@ pub struct Live {
+     pub lang: Lang,
+     /// How far a gamepad's right stick (the camera) goes, in percent of what the pad reports: 25 to 150.
+     pub right_stick: u32,
++    /// The most frames a second the game shows: one of [`FPS_LIMITS`], or 0 for no limit.
++    pub fps_limit: u32,
++}
++
++/// The frame limits the player can choose: multiples of the console's 30 frames a second.
++pub const FPS_LIMITS: [u32; 8] = [30, 60, 90, 120, 150, 180, 210, 240];
++
++/// A frame limit from a setting (`MH3U_FPS_LIMIT`): one of [`FPS_LIMITS`], else 0 (no limit).
++pub fn fps_limit(setting: Option<&str>) -> u32 {
++    setting
++        .and_then(|value| value.trim().parse::<u32>().ok())
++        .filter(|fps| FPS_LIMITS.contains(fps))
++        .unwrap_or(0)
++}
++
++static FPS_LIMIT: AtomicU32 = AtomicU32::new(0);
++/// When the next frame is due, with a limit on.
++static NEXT_FRAME: Mutex<Option<Instant>> = Mutex::new(None);
++/// The game's thread waits for its frames itself (the resolver, `front.rs`), so the thread that draws them does not.
++static FRONT_PACES: AtomicBool = AtomicBool::new(false);
++
++/// Puts a frame limit in force (0: none). It takes effect at the next frame.
++pub fn set_fps_limit(fps: u32) {
++    if FPS_LIMIT.swap(fps, Relaxed) != fps {
++        *NEXT_FRAME.lock().unwrap_or_else(|e| e.into_inner()) = None;
++        if fps == 0 {
++            eprintln!("[gfx] frame limit: none");
++        } else {
++            eprintln!("[gfx] frame limit: {fps} frames a second");
++        }
++    }
++}
++
++/// When a frame due at `due` (if one was) is shown, and when the next one is due, for a frame that asks at `now` with `period`
++/// between frames. A frame that comes early waits; one that comes a little late is shown at once and the next keeps the beat; a
++/// game that fell further behind does not owe the frames it missed.
++fn paced(due: Option<Instant>, now: Instant, period: Duration) -> (Instant, Instant) {
++    let at = match due {
++        Some(due) if due > now || now - due < period => due,
++        _ => now,
++    };
++    (at, at + period)
++}
++
++/// Waits until `at`: sleeps all but the last millisecond, which it spends looking at the clock (a sleep wakes up late).
++fn wait_until(at: Instant) {
++    loop {
++        let now = Instant::now();
++        if now >= at {
++            return;
++        }
++        let left = at - now;
++        if left > Duration::from_micros(1500) {
++            std::thread::sleep(left - Duration::from_millis(1));
++        } else {
++            std::hint::spin_loop();
++        }
++    }
++}
++
++/// Called once a frame, before the frame is handed over to be shown: with a frame limit on, waits for the frame's turn. `front` is
++/// the game's own thread when the frames are drawn in another (the wait belongs there: the game is what must slow down).
++pub fn pace(front: bool) {
++    if front {
++        FRONT_PACES.store(true, Relaxed);
++    } else if FRONT_PACES.load(Relaxed) {
++        return;
++    }
++    let fps = FPS_LIMIT.load(Relaxed);
++    if fps == 0 {
++        return;
++    }
++    let period = Duration::from_nanos(1_000_000_000 / u64::from(fps));
++    let at = {
++        let mut next = NEXT_FRAME.lock().unwrap_or_else(|e| e.into_inner());
++        let (at, then) = paced(*next, Instant::now(), period);
++        *next = Some(then);
++        at
++    };
++    wait_until(at);
+ }
+ 
+ /// The right stick's percent from a setting: 25 to 150, else 100.
+@@ -146,6 +227,7 @@ impl Live {
+             fps_counter: std::env::var_os("MH3U_FPS").is_some(),
+             lang: Lang::parse(var("MH3U_UI_LANG").as_deref()),
+             right_stick: right_stick(var("MH3U_RIGHT_STICK_SENS").as_deref()),
++            fps_limit: fps_limit(var("MH3U_FPS_LIMIT").as_deref()),
+         }
+     }
+ }
+@@ -184,17 +266,18 @@ pub fn file(dir: &Path) -> PathBuf {
+ }
+ 
+ /// The settings as the file keeps them: the launcher's own names (`scale`, `upscaler`, `fsr_sharpness` in percent, `present_mode`,
+-/// `fps_counter`, `ui_language`).
++/// `fps_counter`, `ui_language`, `fps_limit` with 0 for none).
+ pub fn to_text(live: &Live) -> String {
+     format!(
+-        "scale={}\nupscaler={}\nfsr_sharpness={}\npresent_mode={}\nfps_counter={}\nui_language={}\nright_stick_sens={}\n",
++        "scale={}\nupscaler={}\nfsr_sharpness={}\npresent_mode={}\nfps_counter={}\nui_language={}\nright_stick_sens={}\nfps_limit={}\n",
+         live.scale,
+         live.upscaler.code(),
+         (live.sharpness * 100.0).round() as u32,
+         live.present.code(),
+         u8::from(live.fps_counter),
+         live.lang.code(),
+-        live.right_stick
++        live.right_stick,
++        live.fps_limit
+     )
+ }
+ 
+@@ -251,6 +334,7 @@ mod tests {
+             fps_counter: true,
+             lang: Lang::Es,
+             right_stick: 100,
++            fps_limit: 60,
+         };
+         request(live);
+         assert_eq!(take(), Some(live));
+@@ -267,10 +351,39 @@ mod tests {
+             fps_counter: false,
+             lang: Lang::En,
+             right_stick: 60,
++            fps_limit: 120,
+         };
+         assert_eq!(
+             to_text(&live),
+-            "scale=3\nupscaler=fsr\nfsr_sharpness=75\npresent_mode=immediate\nfps_counter=0\nui_language=en\nright_stick_sens=60\n"
++            "scale=3\nupscaler=fsr\nfsr_sharpness=75\npresent_mode=immediate\nfps_counter=0\nui_language=en\nright_stick_sens=60\nfps_limit=120\n"
+         );
+     }
++
++    #[test]
++    fn the_frame_limit_is_a_multiple_of_thirty_or_none() {
++        assert_eq!(fps_limit(Some("60")), 60);
++        assert_eq!(fps_limit(Some(" 240 ")), 240);
++        assert_eq!(fps_limit(Some("75")), 0);
++        assert_eq!(fps_limit(Some("0")), 0);
++        assert_eq!(fps_limit(Some("off")), 0);
++        assert_eq!(fps_limit(None), 0);
++        assert!(FPS_LIMITS.iter().all(|fps| fps % 30 == 0));
++    }
++
++    #[test]
++    fn frames_keep_the_beat_and_a_late_game_owes_nothing() {
++        let period = Duration::from_millis(10);
++        let t0 = Instant::now();
++        // the first frame goes at once
++        assert_eq!(paced(None, t0, period), (t0, t0 + period));
++        // an early frame waits for its turn
++        let due = t0 + period;
++        assert_eq!(paced(Some(due), t0 + Duration::from_millis(4), period), (due, due + period));
++        // a little late: shown at once, and the next one keeps the beat
++        assert_eq!(paced(Some(due), due + Duration::from_millis(3), period), (due, due + period));
++        // far behind: starts again from now
++        let late = due + Duration::from_millis(35);
++        assert_eq!(paced(Some(due), late, period), (late, late + period));
++    }
++
+ }

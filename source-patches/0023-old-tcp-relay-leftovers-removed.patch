@@ -1,0 +1,50 @@
+diff --git a/crates/mh3u-rt/src/net.rs b/crates/mh3u-rt/src/net.rs
+index acc0fb3..cfb382c 100644
+--- a/crates/mh3u-rt/src/net.rs
++++ b/crates/mh3u-rt/src/net.rs
+@@ -143,13 +143,6 @@ fn get_local_ip() -> Ipv4Addr {
+         })
+ }
+ 
+-fn get_online_port() -> u16 {
+-    std::env::var("MH3U_ONLINE_PORT")
+-        .ok()
+-        .and_then(|p| p.parse().ok())
+-        .unwrap_or(9876)
+-}
+-
+ fn get_hunter_name() -> String {
+     std::env::var("MH3U_HUNTER_NAME")
+         .or_else(|_| std::env::var("MH3U_SWKBD_TEXT"))
+@@ -210,7 +203,6 @@ fn redirect_dest(dest: SocketAddrV4) -> SocketAddrV4 {
+     let server_ip: Ipv4Addr = get_online_server()
+         .parse()
+         .unwrap_or(Ipv4Addr::new(127, 0, 0, 1));
+-    let server_port = get_online_port();
+ 
+     // 1. Port 1223: Authentication Server (Nintendo hardcoded/DNS) -> route to server_ip
+     if dest.port() == 1223 {
+@@ -240,12 +232,7 @@ fn redirect_dest(dest: SocketAddrV4) -> SocketAddrV4 {
+         }
+     }
+ 
+-    // 4. Custom online port
+-    if dest.port() == server_port {
+-        return SocketAddrV4::new(server_ip, server_port);
+-    }
+-
+-    // 5. Unspecified (0.0.0.0) or loopback StationURLs published by the host (it reaches the
++    // 4. Unspecified (0.0.0.0) or loopback StationURLs published by the host (it reaches the
+     //    server over 127.0.0.1) -> route to server_ip, which is the host's reachable address.
+     if dest.ip().is_unspecified() || (dest.ip().is_loopback() && !server_ip.is_loopback()) {
+         return SocketAddrV4::new(server_ip, dest.port());
+@@ -1071,9 +1058,6 @@ pub fn find(name: &str) -> Option<SimpleHandler> {
+                     _ => {}
+                 }
+             }
+-            if local_port == 0 {
+-                local_port = get_online_port();
+-            }
+             let sa = SocketAddrV4::new(get_local_ip(), local_port);
+             eprintln!("[net] getsockname(fd={fd}) -> {sa:?}");
+             write_sockaddr(g, addr_ptr, addrlen_ptr, sa);

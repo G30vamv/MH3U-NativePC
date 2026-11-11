@@ -1,0 +1,237 @@
+diff --git a/crates/mh3u-rt/src/camera.rs b/crates/mh3u-rt/src/camera.rs
+index a738164..b025c7f 100644
+--- a/crates/mh3u-rt/src/camera.rs
++++ b/crates/mh3u-rt/src/camera.rs
+@@ -26,6 +26,11 @@ use std::time::Instant;
+ 
+ /// The stick counts as pushed past this length (a worn stick rests a little off its centre).
+ const DEAD: f32 = 0.12;
++/// A push along one axis leaks this much of itself into the other at most (no thumb pushes dead straight): under it the other
++/// axis counts as not pushed, so up and down do not turn the camera, nor left and right lift it.
++const LEAK: f32 = 0.2;
++/// From this much of the other axis on, an axis is taken whole: a push between the two axes moves the camera both ways.
++const BOTH: f32 = 0.5;
+ /// The camera's heights on foot, and where the table of their rows is.
+ const HEIGHTS: u8 = 6;
+ const TABLE: u32 = 0x101f_e460;
+@@ -71,7 +76,18 @@ fn push(x: f32, y: f32, gain: f32) -> (f32, f32) {
+         return (0.0, 0.0);
+     }
+     let far = ((length.min(1.0) - DEAD) / (1.0 - DEAD) * gain).min(1.0);
+-    (x / length * far, y / length * far)
++    let (x, y) = (x / length * far, y / length * far);
++    (apart(x, y), apart(y, x))
++}
++
++/// An axis without what a push along the other one leaks into it: nothing under [`LEAK`] of the other, coming in from there on
++/// with no jump, and whole from [`BOTH`] of the other on (a diagonal stays a diagonal).
++fn apart(axis: f32, other: f32) -> f32 {
++    let (a, o) = (axis.abs(), other.abs());
++    if a >= BOTH * o {
++        return axis;
++    }
++    axis * ((a - LEAK * o) / ((BOTH - LEAK) * o)).max(0.0)
+ }
+ 
+ /// What the game's counter has to be on entry for its speed to be `push` of its most: the game adds `step` to a counter under
+@@ -82,7 +98,7 @@ fn counter(push: f32, steps: f32, step: f32) -> f32 {
+ }
+ 
+ /// The right stick as the camera takes it.
+-fn stick() -> (f32, f32) {
++pub(crate) fn stick() -> (f32, f32) {
+     let (x, y) = crate::input::right_stick_pushed();
+     push(x, y, crate::input::right_stick_gain())
+ }
+@@ -204,6 +220,7 @@ impl Height {
+ fn pitch() -> Callback {
+     let state = Mutex::new(Height::new());
+     let n = AtomicU32::new(0);
++    let both = AtomicU32::new(0);
+     Box::new(move |h: &mut Hook| {
+         let g = Guest::new(h.ctx.mem);
+         let (camera, hunter) = (h.ctx.r[4], h.ctx.r[5]);
+@@ -215,7 +232,7 @@ fn pitch() -> Callback {
+         let now = Instant::now();
+         let dt = s.last.replace(now).map_or(0.0, |t| (now - t).as_secs_f32().min(0.05));
+         let Some(ctrl) = controls(&g, hunter) else { return };
+-        let (_, y) = stick();
++        let (x, y) = stick();
+         let orders = g.u32(ctrl + 0x1c8);
+         if g.u8(ctrl + 0x3d) == 3 {
+             // in the water the camera tilts freely: the game's own way, at the stick's speed
+@@ -253,6 +270,12 @@ fn pitch() -> Callback {
+         if y != 0.0 && said(&n) {
+             eprintln!("[camera] height: stick {y:.2}, at {:.2} (the game has {whole})", s.at);
+         }
++        if x != 0.0 && y != 0.0 {
++            let k = both.fetch_add(1, Relaxed);
++            if k < 5 || k % 400 == 0 {
++                eprintln!("[camera] both ways: stick ({x:.2}, {y:.2}), height at {:.2} (the game had {game})", s.at);
++            }
++        }
+     })
+ }
+ 
+@@ -275,6 +298,30 @@ mod tests {
+         assert_eq!(push(f32::NAN, 0.0, 1.0), (0.0, 0.0));
+     }
+ 
++    #[test]
++    fn a_push_along_one_axis_does_not_move_the_other() {
++        // up or down with the thumb a little to a side, either side: no turning at all
++        for x in [-0.17, -0.1, 0.05, 0.12, 0.17] {
++            let (px, py) = push(x, 0.9, 1.0);
++            assert!(px == 0.0 && py > 0.7, "{x}: {px} {py}");
++            let (px, py) = push(0.9, x, 0.25);
++            assert!(py == 0.0 && px > 0.15, "{x}: {px} {py}");
++        }
++        // past the leak the other axis comes in from 0, with no jump
++        let mut last = 0.0;
++        for k in 0..=80 {
++            let x = 0.17 + 0.009 * k as f32;
++            let (px, py) = push(x, 0.9, 1.0);
++            assert!(px >= last && px - last < 0.05 && px <= py + 1e-6, "{x}: {px} after {last}");
++            last = px;
++        }
++        // a push between the two axes (from 27 to 63 degrees) is taken as it is: the camera turns and rises at once
++        for (x, y) in [(0.7, 0.7), (0.45, 0.85), (-0.85, 0.45), (0.6, -0.5)] {
++            let (px, py) = push(x, y, 1.0);
++            assert!((px / py - x / y).abs() < 1e-5 && px.abs() > 0.3 && py.abs() > 0.3, "{x} {y}: {px} {py}");
++        }
++    }
++
+     #[test]
+     fn the_counter_gives_the_games_speed_times_the_push() {
+         // the game adds the step to a counter under the steps and takes counter / steps of its most
+diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
+index 767b380..36f378c 100644
+--- a/crates/mh3u-rt/src/cheats.rs
++++ b/crates/mh3u-rt/src/cheats.rs
+@@ -19,6 +19,7 @@ use crate::guest::Guest;
+ use crate::hooks::{Callback, Hook, Registry};
+ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering::Relaxed};
+ use std::sync::{Mutex, OnceLock};
++use std::time::Instant;
+ 
+ /// Hunter's hits (`hit_resolve`'s record, byte +6, or +7 for an object).
+ const KIND_HUNTER: u8 = 0;
+@@ -225,14 +226,18 @@ fn infinite_sharpness(_: f32) -> Callback {
+ 
+ /// The bowgun's vertical aim. `aim_pitch` is `f_028a19b8(hunter)`, the per-frame update of a ranged weapon's aim, which turns the hunter
+ /// towards `ctrl+0x184` (the target pitch). While aiming (`+0x58` is 1) the game moves that target with orders 0x2b/0x2c that nothing sets
+-/// on this port, so the aim never moved. Here the target follows the pad instead: X (0x2000, the stick pushed up) raises it, Y (0x1000,
+-/// down) lowers it, within the game's own limits (-0x3e93..0x3e94). The game zeroes the target when a shot starts, so the aimed pitch is
++/// on this port, so the aim never moved. Here the target follows the right stick instead, within the game's own limits
++/// (-0x3e93..0x3e94): as far as it is pushed up or down and by the clock when the camera follows the stick (`camera.rs`), and
++/// otherwise a step an update while the pad says X (0x2000, the stick pushed up) or Y (0x1000, down). The hunter's body leans with
++/// the aim, so it stops well short of the game's limits ([`AIM_MOST`], more through the sight). The game zeroes the target when a shot starts, so the aimed pitch is
+ /// kept here and put back on every update until the hunter stops aiming. Only the hunter that plays here is touched.
+ fn aim_pitch() -> Callback {
+     const NONE: i32 = i32::MIN;
+     let n = AtomicU32::new(0);
+     let target = AtomicI32::new(NONE);
+     let off = AtomicU32::new(0);
++    // when the aim was last moved, and the part of a unit not yet given to the game
++    let clock: Mutex<(Option<Instant>, f32)> = Mutex::new((None, 0.0));
+     Box::new(move |h: &mut Hook| {
+         let g = Guest::new(h.ctx.mem);
+         let hunter = h.ctx.r[3];
+@@ -252,12 +257,27 @@ fn aim_pitch() -> Callback {
+         }
+         off.store(0, Relaxed);
+         let now = i32::from(g.u32(ctrl + 0x184) as u16 as i16);
+-        let kept = target.load(Relaxed);
++        let most = if g.u8(ctrl + 0xe00) == 1 { AIM_MOST_SIGHT } else { AIM_MOST };
++        let kept = match target.load(Relaxed) {
++            NONE => NONE,
++            kept => kept.clamp(-most, most),
++        };
+         let pad = g.u16(ctrl + 0x19c);
+-        let step: i32 = match (pad & 0x2000 != 0, pad & 0x1000 != 0) {
+-            (true, false) => -AIM_STEP,
+-            (false, true) => AIM_STEP,
+-            _ => 0,
++        let step: i32 = if crate::camera::enabled() {
++            let mut c = clock.lock().unwrap_or_else(|e| e.into_inner());
++            let t = Instant::now();
++            let dt = c.0.replace(t).map_or(0.0, |was| (t - was).as_secs_f32().min(0.05));
++            let (_, y) = crate::camera::stick();
++            let (whole, rest) = aim_moved(y, dt, c.1);
++            c.1 = rest;
++            whole
++        } else {
++            let step = match (pad & 0x2000 != 0, pad & 0x1000 != 0) {
++                (true, false) => -AIM_STEP,
++                (false, true) => AIM_STEP,
++                _ => 0,
++            };
++            (step as f32 * crate::input::right_stick_gain()).round() as i32
+         };
+         let to = if step == 0 {
+             if kept == NONE || kept == now {
+@@ -265,8 +285,7 @@ fn aim_pitch() -> Callback {
+             }
+             kept
+         } else {
+-            let step = (step as f32 * crate::input::right_stick_gain()).round() as i32;
+-            (if kept == NONE { now } else { kept } + step).clamp(-0x3e93, 0x3e94)
++            (if kept == NONE { now } else { kept } + step).clamp(-most, most)
+         };
+         target.store(to, Relaxed);
+         g.put_u32(ctrl + 0x184, to as u32 & 0xffff);
+@@ -277,8 +296,25 @@ fn aim_pitch() -> Callback {
+     })
+ }
+ 
+-/// How far the aim's target pitch moves on each update of the aim while the stick is held.
++/// How far the aim's target pitch moves on each update of the aim while the stick is held (the game's own camera).
+ const AIM_STEP: i32 = 0x90;
++/// How far it moves in a second with the stick pushed all the way, when it follows the stick (the whole way up or down is 0x3e94).
++const AIM_A_SECOND: f32 = 24_000.0;
++/// The furthest the aim goes up or down from level (0x4000 is straight up): without the sight, where the hunter's leaning body is
++/// seen (about 28 degrees; at the game's own 88 it stood on its head or sank into the ground), and through the sight (about 56).
++const AIM_MOST: i32 = 0x1400;
++const AIM_MOST_SIGHT: i32 = 0x2800;
++
++/// The whole units the aim moves in `dt` seconds with the stick pushed `y` (up is positive and raises the aim, which is a smaller
++/// pitch), and the part of a unit left for the next time (`rest` is the one left before; a stick let go drops it).
++fn aim_moved(y: f32, dt: f32, rest: f32) -> (i32, f32) {
++    if y == 0.0 {
++        return (0, 0.0);
++    }
++    let moved = rest - y * AIM_A_SECOND * dt;
++    let whole = moved.trunc();
++    (whole as i32, moved - whole)
++}
+ 
+ /// The zenny a gain of `change` becomes with the multiplier (a loss, or nothing, stays as it is).
+ fn zenny(change: i32, times: f32) -> i32 {
+@@ -410,6 +446,27 @@ mod tests {
+     use super::*;
+     use std::collections::BTreeMap;
+ 
++    #[test]
++    fn the_aim_moves_by_the_clock_and_by_how_far_the_stick_is_pushed() {
++        // the same push for a second moves the aim the same at 30 and at 240 updates a second, and half the push half as far
++        let travel = |y: f32, updates: u32| {
++            let (mut at, mut rest) = (0, 0.0);
++            for _ in 0..updates {
++                let (whole, left) = aim_moved(y, 1.0 / updates as f32, rest);
++                at += whole;
++                rest = left;
++            }
++            at
++        };
++        for updates in [30, 60, 240] {
++            assert!((travel(1.0, updates) + AIM_A_SECOND as i32).abs() <= 2, "up raises the aim (a smaller pitch)");
++            assert!((travel(-0.5, updates) - AIM_A_SECOND as i32 / 2).abs() <= 2);
++            // a gentle push still moves it, a unit now and then
++            assert!((travel(0.01, updates) + 240).abs() <= 2);
++        }
++        assert_eq!(aim_moved(0.0, 0.01, 0.9), (0, 0.0), "a stick let go moves nothing and keeps nothing");
++    }
++
+     #[test]
+     fn the_multiplied_damage_stays_under_the_most_the_game_keeps() {
+         assert_eq!(multiplied(10.0, 1000.0), 10_000.0, "a sword's hit as before");
