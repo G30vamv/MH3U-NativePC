@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
+## [0.9.18] - 2026-11-13
+
+### Fixed
+- **The gamepad rumble really works now.** Version 0.9.17 said the pad rumbled again, but it did not: the game itself never asks the pad to rumble (we checked its code and watched it while playing), so nothing happened. We are sorry for the mistake. The port now makes the pad rumble by itself from what happens in play (see below).
+- **The sound that starts a quest was far louder than the rest of the game's sound** (about ten times its usual level). It is played about 10 dB lower now.
+- Words of the English launcher that were still in Spanish (the quick settings on the main page and the Gamepad / Keyboard switch).
+- The launcher's lists and its settings menu no longer reopen by themselves after you pick something, and a mouse button no longer stays "stuck" after a click on the title bar.
+- The marker of the item list no longer slides out of view when you scroll.
+
+### Added
+- **Rumble:** the pad rumbles when you are hit (stronger for bigger hits, by how much of your life they take), when you block (three sizes), when a monster roars (softer the farther it is), when a big monster or you land from a fall, when you faint, when your life comes back, when you use an item or sharpen, when the quest is done, and with a light tick on your own hits (stronger on weak points, a sharp one when a blow glances off). It works with Xbox pads and, straight over USB or Bluetooth, with the DualSense (with its improved vibration on newer firmware) and the DualShock 4. A strength slider and a "rumble on your own hits" switch are in the game menu.
+- **An on-screen keyboard** for the texts the game asks for (your hunter's name, a room's name, a chat line): drawn in the look of the game menu, with letters, numbers, accents and symbols, and driven with the gamepad (cross or left stick to move, A to press, B to delete, X for a space, Y for shift, L / R for symbols, Start to accept, Select to cancel), the mouse or the real keyboard. It is also used for the search line of the item list.
+- **Add any item to your item box,** from a list of every item in the game with a search (the game menu's Cheats page, once the option is on in the launcher's Mods). It changes your save: make a copy first.
+- **The mouse wheel scrolls the lists** of the in-game menu.
+- **The launcher's Mods have two new options:** "Add items to the item box" and "Map in every quest" (both off by default; when off, their rows in the game menu say so).
+- **The log keeps a short summary of the connection with each other player** every ten seconds, so a log is enough to look into an online problem.
+
+### Changed
+- The gamepad layout choice in the Controls tab is gone: the profile list next to the gamepad picture does the same job.
+- The game is built again the first time you press PLAY.
+
 ## [0.9.17] - 2026-11-12
 
 ### Added

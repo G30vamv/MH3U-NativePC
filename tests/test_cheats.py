@@ -141,6 +141,9 @@ class CheatHooksInTheBuildTests(unittest.TestCase):
         config.update({f"mod_{m['id']}": True for m in core.MODS})
         return config
 
+    # the mods that only open an option in the game's menu are on by default and need their hooks: these tests leave them out
+    no_env_mods = {"mod_itembox": False, "mod_questmap": False}
+
     def test_the_hooks_of_a_build_are_read_by_name(self):
         self.build_hooks("0x02129ef4 hit_resolve\n0x0219c720 money_add\n")
         self.assertEqual(core.build_hook_names(self.out), {"hit_resolve", "money_add"})
@@ -148,18 +151,26 @@ class CheatHooksInTheBuildTests(unittest.TestCase):
 
     def test_a_build_without_hooks_lacks_every_hook_the_cheats_need(self):
         self.build_hooks("")
-        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["hit_resolve", "item_to_pouch", "money_add", "monster_init", "sharp_change"])
+        self.assertEqual(core.missing_cheat_hooks(self.all_on(), self.out), ["bloom_draw", "hit_resolve", "item_to_pouch", "map_available", "money_add", "monster_init", "sharp_change"])
 
     def test_the_mods_need_their_hooks_even_with_the_cheats_off(self):
         self.build_hooks("")
-        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": False, "mod_monsterhp": True}, self.out), ["monster_init"])
-        self.assertEqual(core.missing_cheat_hooks({"mod_dmgmeter": True}, self.out), ["hit_resolve", "monster_init"])
+        self.assertEqual(core.missing_cheat_hooks({**self.no_env_mods, "cheats_enabled": False, "mod_monsterhp": True}, self.out), ["monster_init"])
+        self.assertEqual(core.missing_cheat_hooks({**self.no_env_mods, "mod_dmgmeter": True}, self.out), ["hit_resolve", "monster_init"])
 
     def test_only_the_hooks_of_the_cheats_that_are_on_are_needed(self):
         self.build_hooks("0x0219c720 money_add\n")
-        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": True, "cheat_money": True}, self.out), [])
-        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": True, "cheat_sharp": True}, self.out), ["sharp_change"])
-        self.assertEqual(core.missing_cheat_hooks({"cheats_enabled": False, "cheat_sharp": True}, self.out), [])
+        self.assertEqual(core.missing_cheat_hooks({**self.no_env_mods, "cheats_enabled": True, "cheat_money": True}, self.out), [])
+        self.assertEqual(core.missing_cheat_hooks({**self.no_env_mods, "cheats_enabled": True, "cheat_sharp": True}, self.out), ["sharp_change"])
+        self.assertEqual(core.missing_cheat_hooks({**self.no_env_mods, "cheats_enabled": False, "cheat_sharp": True}, self.out), [])
+
+    def test_the_item_box_and_quest_map_mods_are_off_until_ticked_and_travel_as_their_own_variables(self):
+        off = core.mod_env({})
+        self.assertEqual(off, {"MH3U_ITEMBOX": "off", "MH3U_MAP_MOD": "off"})
+        on = core.mod_env({"mod_itembox": True, "mod_questmap": True})
+        self.assertEqual(on, {"MH3U_ITEMBOX": "on", "MH3U_MAP_MOD": "on", "MH3U_MAP": "on"})
+        # they are not in the cheats list the engine reads
+        self.assertEqual(core.build_cheats_env({"mod_itembox": True, "mod_questmap": True, "mod_monsterhp": True}), "monsterhp")
 
     def test_every_cheat_has_its_hooks_named_and_they_are_in_the_package_list(self):
         self.assertEqual(set(core.CHEAT_HOOKS), {c["id"] for c in core.CHEATS} | {m["id"] for m in core.MODS})

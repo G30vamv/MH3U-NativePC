@@ -1,6 +1,8 @@
 """The drop-down menu of the gear button in the title bar: the options of the launcher itself (not of the game). Also the drop-down
 list of a setting with many choices (`DropList`), which opens the same way."""
 
+import time
+
 from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QAbstractButton, QFrame, QHBoxLayout, QVBoxLayout
@@ -150,6 +152,7 @@ class SettingsMenu(QFrame):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        qtanim.note_popup_closed()
         if self._group is not None:
             self._group.stop()
         if self.on_hidden:
@@ -200,6 +203,7 @@ class DropList(QAbstractButton):
         self._value = self._values[0] if self._values else ""
         self._command = command
         self._popup = None
+        self._closed_at = 0.0  # when its list last closed (the press that closes it must not open it again)
         self.rows = []  # the entries of the open list (for the tests)
         self.setFixedHeight(34)
         if width:
@@ -238,6 +242,10 @@ class DropList(QAbstractButton):
         if self.is_open():
             self._popup.close()
             return
+        # a press on this button while its list was open closed the list (a popup takes the press that closes it); the click that
+        # follows must not open it again
+        if time.monotonic() - self._closed_at < 0.25:
+            return
         pop = _ListPopup(self.window(), self.width())
         self.rows = []
         for v in self._values:
@@ -247,9 +255,13 @@ class DropList(QAbstractButton):
             if tip:
                 row.setToolTip(qtanim.tip_html(tip))
             self.rows.append(row)
-        pop.on_hidden = self.update  # the arrow turns back
+        pop.on_hidden = self._list_closed  # the arrow turns back
         self._popup = pop
         pop.popup_under(self)
+        self.update()
+
+    def _list_closed(self):
+        self._closed_at = time.monotonic()
         self.update()
 
     def _pick(self, value):

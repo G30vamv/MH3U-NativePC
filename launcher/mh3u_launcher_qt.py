@@ -462,6 +462,10 @@ class MH3ULauncherApp(LauncherLogic):
         if self.menu.isVisible():
             self.menu.close()
             return
+        # a press on the gear while the menu was open closed it (a popup takes the press that closes it); the click that follows must not
+        # open it again
+        if qtanim.popup_just_closed():
+            return
         self.titlebar.btn_menu.menu_open = True
         self.titlebar.btn_menu.update()
         self.menu.popup_below(self.titlebar.btn_menu)
@@ -998,11 +1002,8 @@ class MH3ULauncherApp(LauncherLogic):
 
         # what was in the graphics tab: layout and camera
         base, bl = _card("card")
-        bl.addWidget(Label("Disposición y cámara", "#7fcfa6", 12, bold=True))
-        bl.addWidget(Label("Disposición de Botones del Mando:"))
-        self.opt_pad = Segmented(["Xbox (A abajo, B der)", "Nintendo (B abajo, A der)"], self.on_pad_changed)
-        self.opt_pad.set("Xbox (A abajo, B der)" if self.config.get("pad_layout") == "xbox" else "Nintendo (B abajo, A der)")
-        bl.addWidget(self.opt_pad)
+        # (the layout of the buttons is chosen with the profile of the drawing of the pad above)
+        bl.addWidget(Label("Cámara", "#7fcfa6", 12, bold=True))
 
         sens, sn = _card("inset", 12)
         head = QHBoxLayout()
@@ -1180,7 +1181,6 @@ class MH3ULauncherApp(LauncherLogic):
             return
         self.pad_map.reset()
         self._save_pad_map()
-        self.opt_pad.set("Xbox (A abajo, B der)" if layout == "xbox" else "Nintendo (B abajo, A der)")
         self.on_pad_changed("Xbox" if layout == "xbox" else "Nintendo")
         self._refresh_map_view()
         if self.pad_listener is not None and self.pad_listener.layout != layout:

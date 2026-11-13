@@ -12,6 +12,8 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 LAUNCHER = os.path.join(ROOT, "launcher")
 sys.path.insert(0, LAUNCHER)
 
+from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -99,6 +101,56 @@ class DropListTests(unittest.TestCase):
         self.assertTrue(all(r.toolTip() for r in self.drop.rows))
         self.drop.toggle_list()
         self.assertFalse(self.drop.is_open())
+
+    def test_a_press_that_closes_the_list_does_not_open_it_again(self):
+        # a popup takes the press that closes it and the click that follows reaches the button: that click must not reopen the list
+        self.drop.toggle_list()
+        self.assertTrue(self.drop.is_open())
+        self.drop._popup.close()
+        _APP.processEvents()
+        self.assertFalse(self.drop.is_open())
+        self.drop.toggle_list()
+        self.assertFalse(self.drop.is_open(), "right after closing, the click is the same press")
+        self.drop._closed_at -= 1.0
+        self.drop.toggle_list()
+        self.assertTrue(self.drop.is_open(), "a later click opens it")
+
+    def test_the_gear_does_not_reopen_its_menu_with_the_press_that_closed_it(self):
+        src = open(os.path.join(os.path.dirname(__file__), "..", "launcher", "mh3u_launcher_qt.py"), encoding="utf-8").read()
+        body = src[src.index("    def open_menu"):src.index("    def on_auto_updates_toggled")]
+        self.assertIn("qtanim.popup_just_closed()", body)
+        self.assertLess(body.index("self.menu.close()"), body.index("qtanim.popup_just_closed()"))
+        self.assertLess(body.index("qtanim.popup_just_closed()"), body.index("popup_below"))
+
+    def test_the_press_that_closes_a_popup_does_not_start_a_window_move_or_resize(self):
+        import qtanim
+        import qttitle
+
+        class Handle:
+            moves = resizes = 0
+
+            def startSystemMove(self):
+                Handle.moves += 1
+
+            def startSystemResize(self, edges):
+                Handle.resizes += 1
+
+        class Win(QWidget):
+            def isMaximized(self):
+                return False
+
+            def windowHandle(self):
+                return Handle()
+
+        win = Win()
+        grip = qttitle._Grip(win, Qt.Edge.LeftEdge, Qt.CursorShape.SizeHorCursor)
+        press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(1, 1), QPointF(1, 1), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        qtanim.note_popup_closed()
+        grip.mousePressEvent(press)
+        self.assertEqual(Handle.resizes, 0)
+        qtanim._POPUP_CLOSED -= 1.0
+        grip.mousePressEvent(press)
+        self.assertEqual(Handle.resizes, 1)
 
     def test_picking_an_entry_closes_the_list_and_tells_the_logic(self):
         self.drop.set("60 FPS")

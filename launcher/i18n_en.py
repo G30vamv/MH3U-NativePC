@@ -3,6 +3,14 @@
 a new text appears in the window. See i18n.py for how they are matched."""
 
 EXACT = {
+    'Mando:': 'Gamepad:',
+    'Completa sin bordes': 'Borderless',
+    'Mando': 'Gamepad',
+    'Teclado': 'Keyboard',
+    'Sonido · Efectos': 'Sound · Effects',
+    'Sí': 'Yes',
+    'Comprobando...': 'Checking...',
+    '⚪ Desactivado': '⚪ Off',
     'Guardar las texturas del juego (para hacer paquetes)': 'Save the game textures (to make packs)',
     '📂 Abrir carpeta de paquetes de texturas': '📂 Open the texture packs folder',
     'Mientras juegas, cada textura se guarda una vez como archivo DDS en la carpeta texture_dump, con el nombre que debe tener su sustituta. Para cambiar una textura, edítala y copia el DDS a la carpeta de texturas con ese mismo nombre (basta con que empiece por esas 8 cifras). Úsalo solo para preparar paquetes: escribe en disco mientras juegas.': 'While you play, each texture is saved once as a DDS file in the texture_dump folder, named as its replacement must be. To change a texture, edit it and copy the DDS to the texture packs folder with the same name (it only has to start with those 8 digits). Use it only to prepare packs: it writes to disk while you play.',
@@ -264,6 +272,11 @@ EXACT = {
     'Verificando instalación...': 'Checking installation...',
     'Versión del Launcher:': 'Launcher Version:',
     'Vida de los monstruos en pantalla': "Monsters' life on screen",
+    'Añadir objetos al baúl': 'Add items to the item box',
+    'Mapa en todas las misiones': 'Map in every quest',
+    'Cámara': 'Camera',
+    '💡 Activa en el menú del juego (F1 o L3 + R3 → Juego) la opción «Añadir objetos al baúl»: una lista de todos los objetos con buscador para poner en tu baúl el que elijas. Cambia tu partida guardada: haz antes una copia. Apagado, la opción sale desactivada en el juego.': '💡 Turns on the "Add items to the item box" option in the in-game menu (F1 or L3 + R3 → Game): a list of every item with a search, to put the one you choose in your item box. It changes your saved game: make a copy first. Off, the option is greyed out in the game.',
+    '💡 Muestra el mapa de la zona en cualquier misión, como si ya tuvieras el objeto Mapa que el baúl da en rango alto y G. Se puede apagar o encender dentro del juego (menú → Juego). No cambia tu partida guardada. Apagado, la opción sale desactivada en el juego.': '💡 Shows the area map in any quest, as if you already had the Map item the supply box gives in high rank and G rank. It can be turned off or on inside the game (menu → Game). It does not change your saved game. Off, the option is greyed out in the game.',
     'Vulkan (Recomendado)': 'Vulkan (Recommended)',
     'Windows podría impedir que tus amigos entren a tu sala:\n\n  -': 'Windows might stop your friends from entering your room:\n\n  -',
     'Xbox (A abajo)': 'Xbox (A bottom)',
@@ -397,6 +410,8 @@ EXACT = {
 
 # texts with a value inside: "{}" stands for it, in the same order in both languages
 TEMPLATES = [
+    ('FSR 1.0 · nitidez {} %', 'FSR 1.0 · sharpness {} %'),
+    ('AMD CAS · nitidez {} %', 'AMD CAS · sharpness {} %'),
     ('API Gráfica: {}', 'Graphics API: {}'),
     ('Cazador: {}', 'Hunter: {}'),
     ('Conectando a {}...', 'Connecting to {}...'),

@@ -121,7 +121,9 @@ class TitleBar(QWidget):
         p.fillRect(self.rect(), g)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized():
+        # (not with the press that has just closed a popup, which the system hands on after the popup is gone: the move would start
+        # with the button already up and never end)
+        if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized() and not qtanim.popup_just_closed():
             handle = self._window.windowHandle()
             if handle:
                 handle.startSystemMove()
@@ -140,7 +142,7 @@ class _Grip(QWidget):
         self.setCursor(cursor)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized():
+        if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized() and not qtanim.popup_just_closed():
             handle = self._window.windowHandle()
             if handle:
                 handle.startSystemResize(self._edges)

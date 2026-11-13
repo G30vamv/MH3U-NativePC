@@ -9,6 +9,7 @@ reduce animations.
 import ctypes
 import math
 import sys
+import time
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPen, QRadialGradient
@@ -36,6 +37,19 @@ def windows_allows():
 def set_user_choice(on):
     global _user_wants
     _user_wants = bool(on)
+
+
+_POPUP_CLOSED = 0.0
+
+
+def note_popup_closed():
+    """A popup (the gear's menu, a list of choices) has just closed: the press that closed it must not also do what is under it."""
+    global _POPUP_CLOSED
+    _POPUP_CLOSED = time.monotonic()
+
+
+def popup_just_closed(ms=250):
+    return (time.monotonic() - _POPUP_CLOSED) * 1000 < ms
 
 
 def enabled():

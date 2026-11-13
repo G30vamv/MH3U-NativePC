@@ -42,7 +42,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.17"
+APP_VERSION = "v0.9.18"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -85,7 +85,31 @@ MODS = [
         "label": "Contador de daño y DPS",
         "hint": "💡 Suma lo que baja la vida de los monstruos (aparte, lo de tus golpes) y el DPS de los últimos 5 s y medio. Es independiente de las barras de vida y también se mueve desde el menú del juego («Mover los paneles»). No cambia nada del juego: recomendado también online.",
     },
+    # these two do not go in MH3U_CHEATS: they reach the game as MH3U_ITEMBOX and MH3U_MAP_MOD (see `mod_env`)
+    {
+        "id": "itembox",
+        "label": "Añadir objetos al baúl",
+        "hint": "💡 Activa en el menú del juego (F1 o L3 + R3 → Juego) la opción «Añadir objetos al baúl»: una lista de todos los objetos con buscador para poner en tu baúl el que elijas. Cambia tu partida guardada: haz antes una copia. Apagado, la opción sale desactivada en el juego.",
+        "env_only": True,
+    },
+    {
+        "id": "questmap",
+        "label": "Mapa en todas las misiones",
+        "hint": "💡 Muestra el mapa de la zona en cualquier misión, como si ya tuvieras el objeto Mapa que el baúl da en rango alto y G. Se puede apagar o encender dentro del juego (menú → Juego). No cambia tu partida guardada. Apagado, la opción sale desactivada en el juego.",
+        "env_only": True,
+    },
 ]
+
+
+def mod_env(config):
+    """The variables the mods that do not travel in MH3U_CHEATS need (the item box and the quest map)."""
+    env = {
+        "MH3U_ITEMBOX": "on" if mod_enabled(config, "itembox") else "off",
+        "MH3U_MAP_MOD": "on" if mod_enabled(config, "questmap") else "off",
+    }
+    if mod_enabled(config, "questmap"):
+        env["MH3U_MAP"] = "on"
+    return env
 
 
 def mod_enabled(config, mod_id):
@@ -123,6 +147,9 @@ CHEAT_HOOKS = {
     "items": ("item_to_pouch",),
     "monsterhp": ("monster_init",),
     "dmgmeter": ("monster_init", "hit_resolve"),
+    # the mods that travel as MH3U_ITEMBOX / MH3U_MAP_MOD: the hooks they ride on
+    "itembox": ("bloom_draw",),
+    "questmap": ("map_available",),
 }
 
 
@@ -165,7 +192,7 @@ def build_cheats_env(config):
         for c in CHEATS:
             if config.get(f"cheat_{c['id']}", False):
                 parts.append(f"{c['id']}={cheat_value(config, c)}" if c.get("value") else c["id"])
-    parts += [m["id"] for m in MODS if mod_enabled(config, m["id"])]
+    parts += [m["id"] for m in MODS if mod_enabled(config, m["id"]) and not m.get("env_only")]
     return ",".join(parts)
 
 # Where the game keeps what the player changed in its F1 overlay (Settings window). The launcher takes it into its own
@@ -2270,6 +2297,7 @@ class LauncherLogic:
 
         if self.config.get("pad_layout"):
             env["MH3U_PAD_LAYOUT"] = self.config["pad_layout"]
+        env.update(mod_env(self.config))
         pad_map = padmap.PadMap(self.config.get("pad_map")).to_env()
         if pad_map:
             env["MH3U_PAD_MAP"] = pad_map  # the button remapper (Controls tab)
