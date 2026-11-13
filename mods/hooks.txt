@@ -32,3 +32,8 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an 
 0x02a8504c dof_draw           # uDOFFilter::vf11: depth of field (the game uses it in few scenes)
 0x02a79f90 bokeh_draw         # uBokehFilter::vf11: bokeh blur
 0x0259fb84 monster_max          # f_0259fb84 = uEnemy::setMaxHp_(monster, base): r3 = the monster, r4 = its base life (max = base x the row of the quest). Only a probe for now
+
+# Rumble from hits (the rumble switch in the game's menu): the hit resolver of a hunter that is hit. The game itself never asks a pad to rumble in play, so the runtime rumbles the pad when the hunter that plays here is hit.
+0x021283ec hunter_hit         # f_021283ec(hit check, hunter r4, hit record r5): float +0x44 of the record = the base damage; only the hunter that plays here counts
+0x021281c4 hunter_hit_end     # f_021281c4(.., hunter r4, owner r5, record r6, .., damage r8, guard r9): the last step of a hunter hit; r9 = 1 when a guard held it, r8 = the damage that goes through
+0x02129300 hit_check_hunter  # f_02129300(hit check, attack record r4, hunter r5): the test of one active attack against one hunter, every frame; a roar is seen here wherever the hunter is
