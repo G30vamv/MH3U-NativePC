@@ -23,3 +23,12 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an 
 
 # Hold to gather (always on unless MH3U_HOLD_GATHER=off): every item carved, gathered or mined goes through the cockpit's "obtained" step.
 0x020eca2c obtain_item        # f_020eca2c(cockpit, _, item, ...): from an item on, a held A reaches the game as presses
+
+# Quest map (the map switch in the game's menu, MH3U_MAP=on): whether the map is shown; the hook says yes without the Map item of the supply box.
+0x0260eea8 map_available      # f_0260eea8(_, hunter): 1 = the map is shown (sGame+0x1b9 = 1, or the hunter has the Map item 0x3f2, never on stage kind 6)
+
+# Screen filters (the bloom and blur switches in the game's menu; MH3U_BLOOM=off / MH3U_BLUR=off): the draw of each filter, which the hook skips when it is off.
+0x02a7830c bloom_draw         # uBloomFilter::vf11: the glow around bright things
+0x02a8504c dof_draw           # uDOFFilter::vf11: depth of field (the game uses it in few scenes)
+0x02a79f90 bokeh_draw         # uBokehFilter::vf11: bokeh blur
+0x0259fb84 monster_max          # f_0259fb84 = uEnemy::setMaxHp_(monster, base): r3 = the monster, r4 = its base life (max = base x the row of the quest). Only a probe for now

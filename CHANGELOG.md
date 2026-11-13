@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
+## [0.9.17] - 2026-11-12
+
+### Added
+- **A new menu inside the game.** F1, F2 or L3 + R3 on a gamepad open it in the middle of the screen, with its own look. It works with the gamepad, the mouse or the keyboard, in English and Spanish, and holds the graphics, game, panels, controls and cheats pages.
+- **Bloom and blur can be turned off**, and the **resolution goes from 0.5x to 4x** (0.5x, 0.75x, 1x, 1.5x, 2x, 3x, 4x), also from the launcher.
+- **The gamepad rumbles again**, as on the Wii U, when the game asks for it. It works with Xbox pads and with PlayStation pads through DSX, DS4Windows or Steam Input, and can be turned off in the menu.
+- **The monsters' panel shows their parts, size and crown.** It follows the monster you hit, the small ones can be shown or hidden, and there is a button to start the damage counter again.
+- **The quest map in every quest**, as a switch in the menu (off by default), and **smooth camera and hold A to gather** can now be switched on and off while you play.
+- **Move the on-screen panels with the gamepad** (the cross or the left stick) as well as with the mouse.
+- **Texture packs.** The launcher can save the game's textures and load replacements you make (a "texture_packs" folder next to the launcher).
+
+### Fixed
+- Changing the resolution quickly in the menu no longer rebuilds the picture at every step; it waits until you stop.
+
+### Changed
+- The game is built again the first time you press PLAY.
+
 ## [0.9.16] - 2026-11-10
 
 ### Added

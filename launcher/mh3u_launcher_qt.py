@@ -265,10 +265,10 @@ class MH3ULauncherApp(LauncherLogic):
     def sync_widgets_from_config(self):
         """The game's overlay changed settings: show them (called from the thread that launches the game or from the window)."""
         c = self.config
-        scale_map = {"1": "1x (720p)", "2": "2x (1440p 2K)", "3": "3x (4K UHD)", "4": "4x (5K Ultra)"}
+        scale_map = {"0.5": "0.5x", "0.75": "0.75x", "1": "1x", "1.5": "1.5x", "2": "2x", "3": "3x", "4": "4x"}
         present_map = {"mailbox": "Mailbox (Fast-Sync)", "fifo": "VSync Clásico (Fifo)", "immediate": "Desactivado (OFF)"}
         upscaler_map = {"fsr": "FSR 1.0 (EASU + RCAS)", "cas": "AMD CAS (Solo Nitidez)", "off": "Desactivado (Nativo)"}
-        self.opt_scale.set(scale_map.get(str(c.get("scale", "2")), "2x (1440p 2K)"))
+        self.opt_scale.set(scale_map.get(str(c.get("scale", "2")), "2x"))
         self.opt_present.set(present_map.get(c.get("present_mode", "mailbox"), "Mailbox (Fast-Sync)"))
         self.opt_fps_limit.set(fps_limit_label(fps_limit_of(c)))
         self.opt_upscaler.set(upscaler_map.get(c.get("upscaler", "fsr"), "FSR 1.0 (EASU + RCAS)"))
@@ -629,7 +629,7 @@ class MH3ULauncherApp(LauncherLogic):
         def yes(on, text_on="Sí", text_off="No"):
             return (text_on, green) if on else (text_off, grey)
 
-        scale = {"1": "1x (720p)", "2": "2x (1440p)", "3": "3x (4K UHD)", "4": "4x (5K)"}.get(str(c.get("scale", "2")), "2x (1440p)")
+        scale = {"0.5": "0.5x", "0.75": "0.75x", "1": "1x", "1.5": "1.5x", "2": "2x (1440p)", "3": "3x", "4": "4x (5K)"}.get(str(c.get("scale", "2")), "2x (1440p)")
         sharp = int(c.get("fsr_sharpness", 75))
         upscaler = {"fsr": f"FSR 1.0 · nitidez {sharp} %", "cas": f"AMD CAS · nitidez {sharp} %"}.get(c.get("upscaler", "fsr"), "Desactivado")
         present = {"mailbox": "Mailbox (Fast-Sync)", "fifo": "VSync clásico (Fifo)", "immediate": "Desactivado"}.get(c.get("present_mode", "mailbox"), "Mailbox")
@@ -713,17 +713,17 @@ class MH3ULauncherApp(LauncherLogic):
         g.addWidget(Label("Opciones Gráficas", "#4fc3d6", 12.5, bold=True))
         lbl_scale = Label("Escala de Resolución Interna:", None, 10.5, bold=True)
         g.addWidget(lbl_scale)
-        self.opt_scale = Segmented(["1x (720p)", "2x (1440p 2K)", "3x (4K UHD)", "4x (5K Ultra)"], self.on_scale_changed)
+        self.opt_scale = Segmented(["0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "4x"], self.on_scale_changed)
         scale_map = {
-            "1": "1x (720p)", "2": "2x (1440p 2K)", "3": "3x (4K UHD)", "4": "4x (5K Ultra)",
-            "1x (Nativo)": "1x (720p)", "2x (1440p/4K)": "2x (1440p 2K)", "3x (Super)": "3x (4K UHD)", "4x (Ultra)": "4x (5K Ultra)",
+            "0.5": "0.5x", "0.75": "0.75x", "1": "1x", "1.5": "1.5x", "2": "2x", "3": "3x", "4": "4x",
+            "1x (Nativo)": "1x", "2x (1440p/4K)": "2x", "3x (Super)": "3x", "4x (Ultra)": "4x",
         }
-        self.opt_scale.set(scale_map.get(str(self.config.get("scale", "2")), "2x (1440p 2K)"))
+        self.opt_scale.set(scale_map.get(str(self.config.get("scale", "2")), "2x"))
         g.addWidget(self.opt_scale)
         _tip(
             lbl_scale,
-            "Resolución a la que se dibuja el juego (base Wii U 1280x720 × factor entero); es independiente del reescalado FSR.\n"
-            "1x (720p): nativo, 60 FPS seguros.\n2x (1440p): 4x píxeles, nítido en monitores 1080p/1440p.\n"
+            "Resolución a la que se dibuja el juego (base Wii U 1280x720 × factor); es independiente del reescalado FSR.\n"
+            "0.5x y 0.75x: menos píxeles que la consola (más FPS en equipos lentos, imagen más blanda).\n1.5x (1080p): un paso intermedio.\n1x (720p): nativo, 60 FPS seguros.\n2x (1440p): 4x píxeles, nítido en monitores 1080p/1440p.\n"
             "3x (4K UHD): 9x píxeles.\n4x (5K): 16x píxeles (GPUs potentes).",
             self.opt_scale,
         )
@@ -750,6 +750,23 @@ class MH3ULauncherApp(LauncherLogic):
         if self.config.get("fps", False):
             self.chk_fps.select()
         g.addWidget(self.chk_fps)
+        self.chk_texture_dump = CheckBox("Guardar las texturas del juego (para hacer paquetes)", self.save_settings_from_ui)
+        if self.config.get("texture_dump", False):
+            self.chk_texture_dump.select()
+        g.addWidget(self.chk_texture_dump)
+        _tip(
+            self.chk_texture_dump,
+            "Mientras juegas, cada textura se guarda una vez como archivo DDS en la carpeta texture_dump, con el nombre que debe tener "
+            "su sustituta. Para cambiar una textura, edítala y copia el DDS a la carpeta de texturas con ese mismo nombre (basta con "
+            "que empiece por esas 8 cifras). Úsalo solo para preparar paquetes: escribe en disco mientras juegas.",
+        )
+        self.btn_textures_folder = Button("📂 Abrir carpeta de paquetes de texturas", "default", self.open_textures_folder, height=34)
+        _tip(
+            self.btn_textures_folder,
+            "Los archivos DDS que pongas aquí (también en subcarpetas) sustituyen a las texturas del juego en la siguiente partida. "
+            "Formatos: BC1, BC3, BC7 o RGBA de 32 bits.",
+        )
+        g.addWidget(self.btn_textures_folder, 0, Qt.AlignmentFlag.AlignLeft)
         lbl_parallel = Label("Gráficos en paralelo (más FPS):", None, 10.5, bold=True)
         g.addWidget(lbl_parallel)
         # an older config file may hold "on" (forced on): that choice is shown, but the window no longer offers it
@@ -850,7 +867,7 @@ class MH3ULauncherApp(LauncherLogic):
         if self.config.get("overlay", True):
             self.chk_overlay.select()
         r.addWidget(self.chk_overlay)
-        _tip(self.chk_overlay, "💡 Con F1 se abre el panel de ajustes y controles y se pueden arrastrar los paneles de los mods; con F2 solo los ajustes rápidos.")
+        _tip(self.chk_overlay, "💡 Con F1 (o F2, o L3 + R3 en el mando) se abre el menú del juego: ajustes, paneles y controles. Con B del mando o Esc se cierra.")
 
         self.chk_mod = {}
         for m in MODS:

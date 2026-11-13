@@ -24,6 +24,12 @@ class IngameSettingsTests(unittest.TestCase):
             {"scale": "3", "upscaler": "cas", "fsr_sharpness": 60, "present_mode": "immediate", "fps": True, "ui_language": "es"},
         )
 
+    def test_reads_the_fractional_resolutions(self):
+        for text in ("0.5", "0.75", "1.5"):
+            path = write("scale=" + text + chr(10))
+            self.addCleanup(os.remove, path)
+            self.assertEqual(core.read_ingame_settings(path), {"scale": text})
+
     def test_ignores_what_is_not_valid(self):
         path = write("scale=9\nupscaler=xyz\nfsr_sharpness=500\npresent_mode=fifo_relaxed\nfps_counter=2\nui_language=fr\nother=1\n")
         self.addCleanup(os.remove, path)

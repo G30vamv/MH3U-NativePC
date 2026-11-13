@@ -42,7 +42,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.16"
+APP_VERSION = "v0.9.17"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -51,7 +51,7 @@ UPDATE_BTN_READY = ("#b8791e", "#d4922a")
 
 # Bump when the translator output changes (e.g. more functions discovered). A game.dll built
 # by an older translator lacks functions the online code needs ("not a translated function").
-TRANSLATOR_REV = "7"  # 7: hunter_hit leaves the hooks list (invincible is retired); 6: hunter_hit moves to the hunter's hit resolver (it was the companions'); 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
+TRANSLATOR_REV = "8"  # 8: a hook can skip the function it is in (the bloom and blur switches), so the build calls `rt_hook` differently; 7: hunter_hit leaves the hooks list (invincible is retired); 6: hunter_hit moves to the hunter's hit resolver (it was the companions'); 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
 
 # The launcher's Cheats section. The engine reads the ones that are on from MH3U_CHEATS (mh3u-rt/src/cheats.rs). To add a cheat: a row
 # here, its callback in cheats.rs and its hook in package/mods/hooks.txt. "value" is for a cheat with a multiplier.
@@ -78,12 +78,12 @@ MODS = [
     {
         "id": "monsterhp",
         "label": "Vida de los monstruos en pantalla",
-        "hint": "💡 Una barra por monstruo de la misión con su nombre y su vida; grande para los principales y pequeña para los pequeños. Se mueve con el ratón con F1 abierto (arrastrando) y por defecto va arriba a la derecha. No cambia nada del juego: recomendado también online.",
+        "hint": "💡 Una barra por monstruo de la misión con su nombre y su vida; grande para los principales y pequeña para los pequeños. Se mueve desde el menú del juego (F1 o L3 + R3 → Paneles → «Mover los paneles») y por defecto va arriba a la derecha. No cambia nada del juego: recomendado también online.",
     },
     {
         "id": "dmgmeter",
         "label": "Contador de daño y DPS",
-        "hint": "💡 Suma lo que baja la vida de los monstruos (aparte, lo de tus golpes) y el DPS de los últimos 5 s y medio. Es independiente de las barras de vida y también se mueve con el ratón con F1 abierto. No cambia nada del juego: recomendado también online.",
+        "hint": "💡 Suma lo que baja la vida de los monstruos (aparte, lo de tus golpes) y el DPS de los últimos 5 s y medio. Es independiente de las barras de vida y también se mueve desde el menú del juego («Mover los paneles»). No cambia nada del juego: recomendado también online.",
     },
 ]
 
@@ -244,7 +244,7 @@ def read_ingame_settings(path):
         if sep:
             raw[key.strip()] = value.strip()
     found = {}
-    if raw.get("scale") in ("1", "2", "3", "4"):
+    if raw.get("scale") in ("0.5", "0.75", "1", "1.5", "2", "3", "4"):
         found["scale"] = raw["scale"]
     if raw.get("upscaler") in ("fsr", "cas", "off"):
         found["upscaler"] = raw["upscaler"]
@@ -359,6 +359,8 @@ DEFAULT_OUT_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser
 BASE_TITLE_ID = "0005000010118300"
 UPDATE_TITLE_ID = "0005000e10118300"
 LLVM_MINGW_URL = "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-x86_64.zip"
+TEXTURE_PACKS_DIR = "texture_packs"
+TEXTURE_DUMP_DIR = "texture_dump"
 DEFAULT_DISCORD_CLIENT_ID = "1564085149283651734"
 
 
@@ -696,6 +698,8 @@ class LauncherLogic:
             "overlay": True,
             "keyboard_controls": True,
             "fps": False,
+            "texture_packs": True,
+            "texture_dump": False,
             "audio": True,
             "audio_fx": True,
             # Online section
@@ -953,6 +957,16 @@ class LauncherLogic:
 
     def on_scale_changed(self, value):
         mapping = {
+            "0.5x": "0.5",
+            "0.75x": "0.75",
+            "1.5x": "1.5",
+            "1x": "1",
+            "2x": "2",
+            "3x": "3",
+            "4x": "4",
+            "0.5x (360p)": "0.5",
+            "0.75x (540p)": "0.75",
+            "1.5x (1080p)": "1.5",
             "1x (720p)": "1",
             "2x (1440p 2K)": "2",
             "3x (4K UHD)": "3",
@@ -1134,6 +1148,8 @@ class LauncherLogic:
     def save_settings_from_ui(self):
         self.config["fullscreen"] = bool(self.chk_fullscreen.get())
         self.config["fps"] = bool(self.chk_fps.get())
+        if hasattr(self, "chk_texture_dump"):
+            self.config["texture_dump"] = bool(self.chk_texture_dump.get())
         self.config["audio"] = bool(self.chk_audio.get())
         self.config["audio_fx"] = bool(self.chk_audio_fx.get())
         self.config["overlay"] = bool(self.chk_overlay.get())
@@ -2310,6 +2326,13 @@ class LauncherLogic:
 
         env["MH3U_INGAME_SETTINGS"] = os.path.join(base_dir, INGAME_SETTINGS_FILE)
 
+        # Texture packs: DDS files in texture_packs/ replace the game's textures; the dump saves the originals to texture_dump/
+        packs_dir = os.path.join(base_dir, TEXTURE_PACKS_DIR)
+        if os.path.isdir(packs_dir) and self.config.get("texture_packs", True):
+            env["MH3U_TEXTURE_PACKS"] = packs_dir
+        if self.config.get("texture_dump", False):
+            env["MH3U_TEXTURE_DUMP"] = os.path.join(base_dir, TEXTURE_DUMP_DIR)
+
         # Online hooks environment preparation
         if self.config.get("online_enabled", False):
             env["MH3U_ONLINE_ENABLED"] = "1"
@@ -2522,6 +2545,15 @@ class LauncherLogic:
                 command=self.launch_game,
                 state="normal",
             ))
+
+    def open_textures_folder(self):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+        folder = os.path.join(base_dir, TEXTURE_PACKS_DIR)
+        os.makedirs(folder, exist_ok=True)
+        try:
+            os.startfile(folder)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir la carpeta: {e}")
 
     def open_save_folder(self):
         save_dir = save_dir_for(self.config)

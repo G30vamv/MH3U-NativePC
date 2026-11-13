@@ -34,6 +34,7 @@
 | `0025-frame-limit.patch` | A frame limit: `MH3U_FPS_LIMIT` (30 to 240 in steps of 30; none by default) and a list in the overlay's Settings window, kept in `ingame_settings.txt` as `fps_limit`. The wait is made once a frame before the swap, on the game's thread when the frames are drawn in another, sleeping all but the last millisecond (`settings.rs`, `overlay.rs`, `gx2.rs`, `front.rs`, with tests). |
 | `0026-straight-camera-and-bowgun-aim-by-the-stick.patch` | The camera's two axes no longer leak into each other (pushing up or down does not turn the camera, a push between the two still does both; `camera.rs`, `LEAK` and `BOTH`), and the bowgun's aim moves by how far the stick is pushed and by the clock, not a step an update (`cheats.rs`, `aim_moved`), and stops before the hunter's leaning body stands on its head (`AIM_MOST`, `AIM_MOST_SIGHT`; the old steps stay with `MH3U_ANALOG_CAMERA=off`). With tests. |
 | `0027-hold-to-gather.patch` | Hold to gather: from an item carved, gathered or mined on, an A that is kept held reaches the game as presses until it is let go or 3 seconds pass with no other item (`gather.rs`, `input::repeat_a`, with a test; hook `obtain_item` in `mods/hooks.txt`; `MH3U_HOLD_GATHER=off` turns it off). |
+| `0028-menu-filters-parts-textures-rumble.patch` | The new in-game menu (Cinzel font, SIL OFL; gamepad, mouse and keyboard), the monsters' parts, size and crown in the life panel, bloom and blur switches (a hook can now skip the function it is in: `TRANSLATOR_REV` 8), resolution from 0.5x to 4x, the quest map in every quest, a live switch for the smooth camera and hold to gather, texture packs (`texture_pack.rs`: DDS swapped by CRC-32, `MH3U_TEXTURE_PACKS` / `MH3U_TEXTURE_DUMP`), a life probe by hunters (`[hpscale]`), gamepad rumble (`rumble.rs`: `VPADControlMotor` / `VPADStopMotor` played through XInput, `MH3U_RUMBLE=off`) and the panels moved with the gamepad. |
 
 ## Reproducing the binary
 
@@ -68,6 +69,7 @@ git apply --ignore-whitespace <path>/0024-camera-follows-the-right-stick.patch
 git apply --ignore-whitespace <path>/0025-frame-limit.patch
 git apply --ignore-whitespace <path>/0026-straight-camera-and-bowgun-aim-by-the-stick.patch
 git apply --ignore-whitespace <path>/0027-hold-to-gather.patch
+git apply --ignore-whitespace <path>/0028-menu-filters-parts-textures-rumble.patch
 cargo build --release -p mh3u-tools
 ```
 
