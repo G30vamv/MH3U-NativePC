@@ -1,5 +1,5 @@
 ﻿============================================================
-  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.16)
+  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, PORT NATIVO DE PC (v0.9.17)
   Launcher desarrollado por: g30wolff99
 ============================================================
 
@@ -11,7 +11,7 @@ Este paquete es 100% PORTABLE y AUTÓNOMO (funciona directamente al descomprimir
 - Interfaz de cristal con resumen en vivo de tus ajustes; efecto Acrylic opcional (solo Windows 11).
 - Soporte para optimización inter-archivos ThinLTO (-flto=thin + -O3).
 - Motor nativo 'mh3u-tools.exe' optimizado con contador de FPS e interfaz fluida.
-- Launcher gráfico oficial v0.9.16 con registro en tiempo real escroleable.
+- Launcher gráfico oficial v0.9.17 con registro en tiempo real escroleable.
 - El launcher y los paneles del juego (F1 / F2) vienen en español e inglés: el idioma sigue el de Windows
   (inglés si no es ninguno de los dos) y se cambia con el engranaje de la barra de título.
   (English version of this file: README.txt)
@@ -38,13 +38,14 @@ PASOS RÁPIDOS PARA JUGAR (SOLO LA PRIMERA VEZ):
      el escalador AMD FSR 1.0 o AMD CAS, y el nivel de nitidez.
    - La pestaña "Controles y Mandos" tiene el remapeador de botones (elige una acción y pulsa en tu
      mando el botón que quieres usar), la disposición del mando y la sensibilidad de cámara.
-   - Dentro del juego, F2 abre unos ajustes rápidos (resolución, reescalado, nitidez, VSync,
-     contador de FPS, sensibilidad de cámara e idioma); F1 abre el panel completo. El botón B del mando los cierra.
+   - Dentro del juego, F1 (o F2, o L3 + R3 en el mando) abre el menú: resolución (0,5x a 4x), reescalado,
+     nitidez, VSync, límite y contador de FPS, bloom y desenfoque, cámara suave, mantener A para recoger,
+     sensibilidad de cámara, idioma y los paneles de vida y daño de los monstruos. El botón B del mando o Esc lo cierra.
 5. ¡Listo! Pulsa en "🎮 JUGAR".
 
 MODS Y TRUCOS (pestaña de ajustes):
 - «Mods»: vida de los monstruos y contador de daño en pantalla. Solo leen el juego, no cambian nada: son seguros
-  y recomendados también en partidas online. Con F1 abierto se pueden arrastrar con el ratón.
+  y recomendados también en partidas online. Se mueven desde el menú del juego («Mover los paneles»).
 - «Trucos» (desactivados por defecto): One Hit Kill, filo infinito, más zenny y objetos infinitos (incluida la
   munición de las ballestas). Cambian el juego y pueden alterar o corromper tu partida guardada: haz copia antes.
   En partidas online NO se aconsejan (no están bloqueados, pero pueden afectar a tu partida y a la de los demás).
