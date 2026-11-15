@@ -12,7 +12,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'customtkinter', 'darkdetect', 'glass', 'mh3u_launcher',
+        'tkinter', 'customtkinter', 'darkdetect', 'glass', 'mh3u_launcher', 'numpy',
         'PySide6.QtNetwork', 'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtPdf', 'PySide6.QtSvg', 'PySide6.QtOpenGL',
         'PySide6.QtDBus', 'PySide6.QtWebEngineCore', 'PySide6.QtMultimedia', 'PySide6.QtSql', 'PySide6.QtTest',
     ],

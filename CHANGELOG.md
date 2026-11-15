@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
+## [0.9.19] - 2026-11-15
+
+### Fixed
+- **The "Install DirectX 12 helper" button did nothing when you clicked it** (since version 0.9.14). It opens its window with Microsoft's terms again, and the same goes for the question the launcher asks when you press PLAY with DirectX 12 and the helper is missing. Sorry for the trouble. Nothing else changed: the game is not built again.
+
 ## [0.9.18] - 2026-11-13
 
 ### Fixed

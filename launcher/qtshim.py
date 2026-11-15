@@ -205,20 +205,21 @@ def license_dialog(title, intro, text, accept="Acepto y descargar", decline="Can
 
     def show():
         dlg = QDialog()
-        title, intro, text, accept, decline = (i18n.t(str(x)) for x in (title, intro, text, accept, decline))
-        dlg.setWindowTitle(title)
+        # new names: assigning `title` etc. here would make them local to `show` and the line would fail before they had a value
+        w_title, w_intro, w_text, w_accept, w_decline = (i18n.t(str(x)) for x in (title, intro, text, accept, decline))
+        dlg.setWindowTitle(w_title)
         dlg.resize(640, 520)
         lay = QVBoxLayout(dlg)
-        lab = QLabel(str(intro))
+        lab = QLabel(str(w_intro))
         lab.setWordWrap(True)
         lay.addWidget(lab)
-        box = QPlainTextEdit(str(text))
+        box = QPlainTextEdit(str(w_text))
         box.setReadOnly(True)
         lay.addWidget(box, 1)
         row = QHBoxLayout()
         row.addStretch(1)
-        no = QPushButton(str(decline))
-        yes = QPushButton(str(accept))
+        no = QPushButton(str(w_decline))
+        yes = QPushButton(str(w_accept))
         no.clicked.connect(dlg.reject)
         yes.clicked.connect(dlg.accept)
         no.setDefault(True)  # Enter must not accept legal terms

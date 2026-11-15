@@ -103,3 +103,28 @@ class GpuThreadSettingTests(unittest.TestCase):
             stub = Stub()
             core.LauncherLogic.on_gpu_thread_changed(stub, text)
             self.assertEqual((stub.config["gpu_thread"], stub.saved), (mode, 1), text)
+
+
+class LicenseDialogTests(unittest.TestCase):
+    """The DirectX 12 helper's button did nothing in v0.9.14-v0.9.18: the license window failed before it opened."""
+
+    def test_the_license_window_opens_and_answers(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "launcher"))
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication, QDialog
+
+        import qtshim
+
+        app = QApplication.instance() or QApplication([])
+        seen = []
+
+        def answer():
+            for w in app.topLevelWidgets():
+                if isinstance(w, QDialog) and w.isVisible():
+                    seen.append(w.windowTitle())
+                    w.accept()
+
+        QTimer.singleShot(200, answer)
+        self.assertTrue(qtshim.license_dialog("Ayuda de DirectX 12", "intro", "terms"))
+        self.assertEqual(len(seen), 1)
