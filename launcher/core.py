@@ -42,7 +42,7 @@ try:
 except Exception:  # update support is optional; the launcher must work without it
     updater = None
 
-APP_VERSION = "v0.9.19"
+APP_VERSION = "v0.9.20"
 
 # Header update widget colors (state -> label color) and button looks: (fg, hover)
 UPDATE_COLORS = {"info": "#9db3ba", "ok": "#7fcfa6", "warn": "#eab84c", "error": "#e07a6f"}
@@ -51,7 +51,7 @@ UPDATE_BTN_READY = ("#b8791e", "#d4922a")
 
 # Bump when the translator output changes (e.g. more functions discovered). A game.dll built
 # by an older translator lacks functions the online code needs ("not a translated function").
-TRANSLATOR_REV = "8"  # 8: a hook can skip the function it is in (the bloom and blur switches), so the build calls `rt_hook` differently; 7: hunter_hit leaves the hooks list (invincible is retired); 6: hunter_hit moves to the hunter's hit resolver (it was the companions'); 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
+TRANSLATOR_REV = "9"  # 9: hit_register joins the hooks list (the damage meter of the host); 8: a hook can skip the function it is in (the bloom and blur switches), so the build calls `rt_hook` differently; 7: hunter_hit leaves the hooks list (invincible is retired); 6: hunter_hit moves to the hunter's hit resolver (it was the companions'); 5: hunter_hit and monster_init join the hooks list (invincible, monster life, damage meter); 4: the cheats' hooks are in mods/hooks.txt, and a stale build is translated again
 
 # The launcher's Cheats section. The engine reads the ones that are on from MH3U_CHEATS (mh3u-rt/src/cheats.rs). To add a cheat: a row
 # here, its callback in cheats.rs and its hook in package/mods/hooks.txt. "value" is for a cheat with a multiplier.

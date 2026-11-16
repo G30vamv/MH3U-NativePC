@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 Every entry is also published as the notes of its [GitHub Release](../../releases). From 0.9.14 the launcher comes in English and Spanish.
 
+## [0.9.20] - 2026-11-16
+
+### Fixed
+- **The damage meter shows the real damage of each hunter when you host a room** (or play alone). Before, it split the monster's lost life by the base damage of each hit, so the numbers differed from what your friends saw. Guests still see only the total.
+- **The damage meter starts again by itself** when you leave the quest results, instead of carrying the numbers over to the next quest.
+
+### Added
+- **Press F8 (or Share + R3 on a PS pad) to mark a moment in the log**, for example when a monster teleports or moves choppily. The log then says how the connection with each player was doing. Please send `mh3u_latest.log` after pressing it.
+- The log also tells how long each player's own packets take to leave your PC, to find where the lag comes from.
+- The game will be built again on your PC the first time you play after updating.
+
 ## [0.9.19] - 2026-11-15
 
 ### Fixed

@@ -1,0 +1,325 @@
+diff --git a/crates/mh3u-gfx/src/kbm.rs b/crates/mh3u-gfx/src/kbm.rs
+index 15d0cd4..0656527 100644
+--- a/crates/mh3u-gfx/src/kbm.rs
++++ b/crates/mh3u-gfx/src/kbm.rs
+@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
+ use std::path::Path;
+ 
+ /// Keys the window keeps for itself: the overlay's and fullscreen's (Alt+Enter, so Enter is not bound either).
+-pub const RESERVED: [&str; 5] = ["F1", "F2", "F11", "Enter", "NumpadEnter"];
++pub const RESERVED: [&str; 6] = ["F1", "F2", "F8", "F11", "Enter", "NumpadEnter"];
+ 
+ /// The GamePad's buttons by the names the file uses.
+ pub fn button_mask(name: &str) -> Option<u32> {
+diff --git a/crates/mh3u-gfx/src/lib.rs b/crates/mh3u-gfx/src/lib.rs
+index 3024176..ae1bfba 100644
+--- a/crates/mh3u-gfx/src/lib.rs
++++ b/crates/mh3u-gfx/src/lib.rs
+@@ -436,6 +436,13 @@ impl<F: FnOnce(Display) + Send + 'static> ApplicationHandler for App<F> {
+             // the surface follows the new size at the next present; the picture keeps its proportions (bars at the sides or top)
+             return;
+         }
++        if let WindowEvent::KeyboardInput { event: k, .. } = &event
++            && k.physical_key == PhysicalKey::Code(winit::keyboard::KeyCode::F8)
++            && k.state == ElementState::Pressed
++            && !k.repeat
++        {
++            mh3u_rt::net::mark("F8");
++        }
+         let open = mh3u_rt::input::OVERLAY_OPEN.load(std::sync::atomic::Ordering::Relaxed);
+         // F1 opens the whole overlay and F2 its Settings window alone; either one closes it again
+         let overlay_key = match &event {
+diff --git a/crates/mh3u-rt/src/cheats.rs b/crates/mh3u-rt/src/cheats.rs
+index 4f605e4..a9aed6d 100644
+--- a/crates/mh3u-rt/src/cheats.rs
++++ b/crates/mh3u-rt/src/cheats.rs
+@@ -117,6 +117,16 @@ pub fn register(r: &mut Registry) -> usize {
+     if probing() && r.on("hit_resolve", Box::new(probe_hit)) {
+         eprintln!("[cheats] probe on: the target of each monster hit is compared with how it was at the one before");
+     }
++    // the damage probe, on every machine of a room (host and guest): what each hit says and how much it ends up doing
++    let probe = std::env::var("MH3U_DMG_PROBE").map_or(true, |v| v.trim() != "0");
++    if probe {
++        let a = r.on("hit_resolve", crate::combat::damage_probe_resolve());
++        eprintln!("[dmg] probe on (MH3U_DMG_PROBE=0 turns it off): hit_resolve {a}");
++    }
++    // each registered hit: the host's meter takes the exact damage and the hunter from it; the probe says it too when it is on
++    if r.on("hit_register", crate::combat::damage_probe_register(probe)) {
++        crate::combat::use_register_hits();
++    }
+     // where the game keeps how many hunters play (a log only; says nothing without the hook)
+     r.on("monster_max", crate::combat::max_hp_probe());
+     // the bowgun's aim: always on (a fix, not a cheat)
+diff --git a/crates/mh3u-rt/src/combat.rs b/crates/mh3u-rt/src/combat.rs
+index bb8582d..b3b504e 100644
+--- a/crates/mh3u-rt/src/combat.rs
++++ b/crates/mh3u-rt/src/combat.rs
+@@ -266,6 +266,15 @@ pub fn add_monster(address: u32) -> bool {
+     })
+ }
+ 
++/// The quest is over (the results screen was left): the counters and the monsters followed start again for the next one.
++pub fn end_quest() {
++    with_state(|s| {
++        s.clear_counters();
++        s.monsters.clear();
++        s.last_hit_monster = None;
++    });
++}
++
+ /// Starts the counters again (what the overlay's button does).
+ pub fn reset() {
+     with_state(State::clear_counters);
+@@ -549,7 +558,10 @@ pub fn note_hits() -> Callback {
+         let Some(slot) = attacker_slot(&g, record) else { return };
+         let base = f32::from_bits(g.u32(record + 0x44));
+         let local = local_slot(&g);
+-        note_hit_on(slot, base, local, h.ctx.r[4]);
++        // the host sees every hit of the room through `hit_register`, with the damage each does: it feeds the meter there, not this
++        if !(REGISTER_HITS.load(Relaxed) && local == Some(HOST_SLOT)) {
++            note_hit_on(slot, base, local, h.ctx.r[4]);
++        }
+         let own = local == Some(slot);
+         let n = HIT_LINES.fetch_add(1, Relaxed);
+         if n < LOG_LINES {
+@@ -565,6 +577,97 @@ pub fn note_hits() -> Callback {
+     })
+ }
+ 
++/// The number of the hunter of the host of a room (and of a hunter alone).
++const HOST_SLOT: u8 = 0;
++
++/// Whether the `hit_register` hook is in the game, so the host's meter is fed with the exact damage of each hit (set at start-up).
++static REGISTER_HITS: AtomicBool = AtomicBool::new(false);
++
++/// The `hit_register` hook is in this build: on the host the meter counts what each hit really does, hunter by hunter.
++pub fn use_register_hits() {
++    REGISTER_HITS.store(true, Relaxed);
++}
++
++/// Whether a line of the damage probe is written for its `n`th hit (counted from 0): the first ones all, then every fifth, then none.
++fn probe_line(n: u32) -> bool {
++    n < 150 || (n < 1500 && n % 5 == 0)
++}
++
++/// The damage probe (`[dmg]` lines, on host AND guest; `MH3U_DMG_PROBE=0` turns it off): first half, the callback of `hit_resolve` (it
++/// goes first, so it sees the record as the game made it, before One Hit Kill changes it): who is the attacker, the base damage, whether
++/// the target is a monster and its life. It changes nothing.
++pub fn damage_probe_resolve() -> Callback {
++    let count = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        let (target, record) = (h.ctx.r[4], h.ctx.r[5]);
++        if record == 0 {
++            return;
++        }
++        let g = Guest::new(h.ctx.mem);
++        // only the hunters' hits (or those of their objects): the monsters' are not what is measured
++        let Some(slot) = attacker_slot(&g, record) else { return };
++        let n = count.fetch_add(1, Relaxed);
++        if !probe_line(n) {
++            return;
++        }
++        let life = read_monster(&g, target).map(|(id, now, max)| format!("monster id {id} life {now}/{max}")).unwrap_or_else(|| "not a monster".into());
++        eprintln!(
++            "[dmg] resolve {}: hunter {slot}, this machine's {:?}, class {}/{}, base {:.1}, owner {:#x}/{:#x}, target {target:#x} ({life}), lr {:#x}",
++            n + 1,
++            local_slot(&g),
++            g.u8(record + 6),
++            g.u8(record + 7),
++            f32::from_bits(g.u32(record + 0x44)),
++            g.u32(record + 0x10),
++            g.u32(record + 0x14),
++            h.ctx.lr
++        );
++        if n < 4 {
++            let words: Vec<String> = (0..0x1cu32).map(|i| format!("{:08x}", g.u32(record + 4 * i))).collect();
++            eprintln!("[dmg] resolve {} record: {}", n + 1, words.join(" "));
++        }
++    })
++}
++
++/// Second half, the callback of `hit_register` (`f_025c824c`, which `hit_resolve` calls at the end of a hit that landed on a monster to
++/// register it: its registers are said raw, since which is which is what is being found out: the monster, the kind, the hunter's number,
++/// the final damage). Says too the life of the monster, so the next line shows what the hit took.
++pub fn damage_probe_register(log: bool) -> Callback {
++    let count = AtomicU32::new(0);
++    Box::new(move |h: &mut Hook| {
++        let n = count.fetch_add(1, Relaxed);
++        let g = Guest::new(h.ctx.mem);
++        let r = &h.ctx.r;
++        // the host (or a hunter alone) resolves every hit of the room: r4 0 = a hit on a monster, r5 = the hunter, r6 = the damage it does
++        if REGISTER_HITS.load(Relaxed) && r[4] == 0 && r[6] as i32 > 0 && r[5] < SLOTS as u32 {
++            let local = local_slot(&g);
++            if local == Some(HOST_SLOT) && read_monster(&g, r[3]).is_some() {
++                note_hit_on(r[5] as u8, (r[6] as i32) as f32, local, r[3]);
++            }
++        }
++        if !log || !probe_line(n) {
++            return;
++        }
++        let life = [r[3], r[4]]
++            .iter()
++            .find_map(|&m| read_monster(&g, m).map(|(id, now, max)| format!("monster {m:#x} id {id} life {now}/{max}")))
++            .unwrap_or_else(|| "no monster in r3/r4".into());
++        eprintln!(
++            "[dmg] register {}: r3 {:#x} r4 {:#x} r5 {:#x} r6 {:#x} ({}) r7 {:#x} r8 {:#x}; {life}; this machine's {:?}; lr {:#x}",
++            n + 1,
++            r[3],
++            r[4],
++            r[5],
++            r[6],
++            r[6] as i32,
++            r[7],
++            r[8],
++            local_slot(&g),
++            h.ctx.lr
++        );
++    })
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/crates/mh3u-rt/src/input.rs b/crates/mh3u-rt/src/input.rs
+index dd83c12..f41c988 100644
+--- a/crates/mh3u-rt/src/input.rs
++++ b/crates/mh3u-rt/src/input.rs
+@@ -324,6 +324,9 @@ pub static OVERLAY_PRESSES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(V
+ /// Both sticks pressed in (L3 + R3) held together open and close the overlay's menu. The game has no use for the pair, and the
+ /// combination's buttons are kept from the game until they are let go (the first one pressed alone does reach it, as a stick click).
+ pub const OVERLAY_COMBO: u32 = button::STICK_L | button::STICK_R;
++/// Share / Create / Back + the right stick's click writes a `[mark]` line in the log (`net::mark`), to find a moment of a room afterwards.
++/// Its buttons are kept from the game until they are let go, like the overlay's.
++pub const MARK_COMBO: u32 = button::MINUS | button::STICK_R;
+ 
+ /// Whether the game's window has the focus (the window sets it on each focus change).
+ pub static FOCUSED: AtomicBool = AtomicBool::new(true);
+@@ -441,6 +444,10 @@ impl Input {
+             let before = self.pad.fetch_or(mask, Relaxed);
+             let held = before | mask;
+             // only the press that completes the combination toggles (a repeated press of a held button does not)
++            if before & MARK_COMBO != MARK_COMBO && held & MARK_COMBO == MARK_COMBO {
++                SWALLOWED.fetch_or(MARK_COMBO, Relaxed);
++                crate::net::mark("gamepad");
++            }
+             if OVERLAY_ENABLED.load(Relaxed) && before & OVERLAY_COMBO != OVERLAY_COMBO && held & OVERLAY_COMBO == OVERLAY_COMBO {
+                 OVERLAY_SETTINGS_ONLY.store(false, Relaxed);
+                 OVERLAY_TOGGLE.store(true, Relaxed);
+diff --git a/crates/mh3u-rt/src/net.rs b/crates/mh3u-rt/src/net.rs
+index 02be056..1c00b68 100644
+--- a/crates/mh3u-rt/src/net.rs
++++ b/crates/mh3u-rt/src/net.rs
+@@ -148,6 +148,12 @@ struct PeerStats {
+     longest_ms: u32,
+     over_100: u32,
+     over_500: u32,
++    /// The same for what the game sends (the gap between its calls to send), to tell a game that sends in bursts from a network that
++    /// delivers them that way.
++    last_sent: Option<Instant>,
++    sent_longest_ms: u32,
++    sent_over_100: u32,
++    sent_over_500: u32,
+ }
+ 
+ static P2P: Mutex<(Option<Instant>, BTreeMap<Ipv4Addr, PeerStats>)> = Mutex::new((None, BTreeMap::new()));
+@@ -161,6 +167,13 @@ fn p2p_note(port: u16, peer: Ipv4Addr, bytes: usize, sent: bool) {
+     let mut guard = P2P.lock().unwrap_or_else(|e| e.into_inner());
+     let st = guard.1.entry(peer).or_default();
+     if sent {
++        if let Some(last) = st.last_sent {
++            let gap = now.duration_since(last).as_millis().min(u128::from(u32::MAX)) as u32;
++            st.sent_longest_ms = st.sent_longest_ms.max(gap);
++            st.sent_over_100 += u32::from(gap > 100);
++            st.sent_over_500 += u32::from(gap > 500);
++        }
++        st.last_sent = Some(now);
+         st.sent += 1;
+         st.sent_bytes += bytes as u64;
+     } else {
+@@ -176,6 +189,25 @@ fn p2p_note(port: u16, peer: Ipv4Addr, bytes: usize, sent: bool) {
+     }
+ }
+ 
++/// A moment the player marks as it happens (F8, or Share + R3 on a gamepad): one numbered line with the traffic of the window so far, so
++/// a stutter seen in a room can be found in the log by its time and numbers.
++pub fn mark(how: &str) {
++    static N: AtomicU32 = AtomicU32::new(0);
++    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
++    eprintln!("[mark] #{n} ({how})");
++    let now = Instant::now();
++    let guard = P2P.lock().unwrap_or_else(|e| e.into_inner());
++    let secs = guard.0.map_or(0.0, |s| now.duration_since(s).as_secs_f32());
++    for (peer, st) in guard.1.iter() {
++        let silent = st.last_recv.map_or(0, |t| now.duration_since(t).as_millis().min(u128::from(u32::MAX)) as u32);
++        let silent_sent = st.last_sent.map_or(0, |t| now.duration_since(t).as_millis().min(u128::from(u32::MAX)) as u32);
++        eprintln!(
++            "[mark] #{n} {peer}: window so far {secs:.1} s: sent {}, received {}, gaps over 100 ms {} (longest {} ms, silent for {silent} ms), sent gaps over 100 ms {} (longest {} ms, silent for {silent_sent} ms)",
++            st.sent, st.recv, st.over_100, st.longest_ms, st.sent_over_100, st.sent_longest_ms
++        );
++    }
++}
++
+ /// Writes the lines of the window that ended, when it has (called often, from the game's polling of its sockets).
+ fn p2p_report() {
+     let now = Instant::now();
+@@ -197,11 +229,11 @@ fn p2p_report() {
+         let longest = st.longest_ms.max(silent);
+         if st.sent + st.recv > 0 {
+             eprintln!(
+-                "[net p2p] {peer}: {secs:.0} s: sent {} ({} B), received {} ({} B), gaps over 100 ms {}, over 500 ms {}, longest {longest} ms",
+-                st.sent, st.sent_bytes, st.recv, st.recv_bytes, st.over_100, st.over_500
++                "[net p2p] {peer}: {secs:.0} s: sent {} ({} B), received {} ({} B), gaps over 100 ms {}, over 500 ms {}, longest {longest} ms; sent gaps over 100 ms {}, over 500 ms {}, longest {} ms",
++                st.sent, st.sent_bytes, st.recv, st.recv_bytes, st.over_100, st.over_500, st.sent_over_100, st.sent_over_500, st.sent_longest_ms
+             );
+         }
+-        *st = PeerStats { last_recv: st.last_recv, ..PeerStats::default() };
++        *st = PeerStats { last_recv: st.last_recv, last_sent: st.last_sent, ..PeerStats::default() };
+     }
+ }
+ 
+@@ -1171,4 +1203,19 @@ mod p2p_tests {
+         assert_eq!((st.sent, st.sent_bytes, st.recv, st.recv_bytes), (1, 100, 2, 100));
+         assert!(!guard.1.contains_key(&Ipv4Addr::new(26, 9, 9, 9)), "the server ports are not play traffic");
+     }
++
++    #[test]
++    fn the_games_own_sends_and_a_mark_are_counted() {
++        let peer = Ipv4Addr::new(26, 4, 5, 6);
++        p2p_note(50113, peer, 10, true);
++        std::thread::sleep(Duration::from_millis(130));
++        p2p_note(50113, peer, 10, true);
++        {
++            let guard = P2P.lock().unwrap();
++            let st = guard.1.get(&peer).expect("counted");
++            assert_eq!(st.sent_over_100, 1);
++            assert!(st.sent_longest_ms >= 100);
++        }
++        mark("test");
++    }
+ }
+diff --git a/crates/mh3u-rt/src/scene.rs b/crates/mh3u-rt/src/scene.rs
+index ff40e9c..44e1e54 100644
+--- a/crates/mh3u-rt/src/scene.rs
++++ b/crates/mh3u-rt/src/scene.rs
+@@ -150,8 +150,9 @@ fn refresh(g: &Guest) {
+     let results = found.contains(&0x0202_2c8c);
+     if results && !RESULTS.swap(true, Relaxed) {
+         crate::rumble::quest_done();
+-    } else if !results {
+-        RESULTS.store(false, Relaxed);
++    } else if !results && RESULTS.swap(false, Relaxed) {
++        // the results screen is left: the damage meter starts again for the next quest
++        crate::combat::end_quest();
+     }
+     let Some((now, by)) = decide(&found) else { return };
+     if SCENE.swap(to_u8(now), Relaxed) != to_u8(now) || DECIDED_BY.swap(by, Relaxed) != by {
+diff --git a/mods/hooks.txt b/mods/hooks.txt
+index ede5546..0b3defb 100644
+--- a/mods/hooks.txt
++++ b/mods/hooks.txt
+@@ -13,4 +13,5 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an
+ 0x02129ef4 hit_resolve           # f_02129ef4: resolves ONE hit; r5 = the hit record: byte +6 = attacker kind (0 hunter, 1 monster), float +0x44 = base damage
+ 0x0259fc98 monster_init           # f_0259fc98(monster, ..): sets a monster's life at spawn (uEnemy::initMaxHp); r3 = the monster, whose state *(r3+0x1be0) holds hp_vital (+0x8b8) and max_hp_vital (+0x8bc). The life bars and the damage meter follow the monsters from here
+ 0x0285f530 sharp_change          # f_0285f530(hunter, change, flag): adds `change` to the weapon's sharpness (negative = it wears)
++0x025c824c hit_register          # f_025c824c: registers a hit that landed on a monster (called by hit_resolve); r3..r7 = the monster, the kind, the hunter's number, the final damage. Only a probe for now
+ 0x0259fb84 monster_max          # f_0259fb84 = uEnemy::setMaxHp_(monster, base): r3 = the monster, r4 = its base life (max = base x the row of the quest). Only a probe for now
