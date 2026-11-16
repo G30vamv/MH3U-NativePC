@@ -1,5 +1,5 @@
 ============================================================
-  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, NATIVE PC PORT (v0.9.19)
+  MH3U NativePC - MONSTER HUNTER 3 ULTIMATE, NATIVE PC PORT (v0.9.20)
   Launcher developed by: g30wolff99
 ============================================================
 
@@ -13,7 +13,7 @@ This package is 100% PORTABLE and SELF-CONTAINED (it works straight after unzipp
 - Glass interface with a live summary of your settings; optional Acrylic effect (Windows 11 only).
 - Support for link-time optimisation ThinLTO (-flto=thin + -O3).
 - The native engine 'mh3u-tools.exe', tuned, with an FPS counter and a smooth interface.
-- Official graphical launcher v0.9.19 with a scrollable real-time log.
+- Official graphical launcher v0.9.20 with a scrollable real-time log.
 - The launcher and the game's panels (F1 / F2) come in English and Spanish: the language follows
   Windows (English if it is neither) and can be changed with the gear button in the title bar.
 
@@ -42,6 +42,8 @@ QUICK STEPS TO PLAY (FIRST TIME ONLY):
    - Inside the game, F1 (or F2, or L3 + R3 on a gamepad) opens the menu: resolution (0.5x to 4x), upscaling,
      sharpness, VSync, FPS limit and counter, bloom and blur, smooth camera, hold A to gather, camera sensitivity,
      language and the monster life and damage panels. The gamepad's B button or Esc closes it.
+   - F8 (or Share + R3 on a PS pad) puts a mark in the log (`mh3u_latest.log`): press it when you see a stutter
+     or a monster that teleports and send the log, so we can see what the network was doing then.
 5. Done! Press "PLAY".
 
 MODS AND CHEATS (settings tab):

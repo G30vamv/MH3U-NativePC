@@ -37,3 +37,6 @@ in:0x0219b080 item_to_pouch      # f_0219aeac(save, item, count): count -1 = an 
 0x021283ec hunter_hit         # f_021283ec(hit check, hunter r4, hit record r5): float +0x44 of the record = the base damage; only the hunter that plays here counts
 0x021281c4 hunter_hit_end     # f_021281c4(.., hunter r4, owner r5, record r6, .., damage r8, guard r9): the last step of a hunter hit; r9 = 1 when a guard held it, r8 = the damage that goes through
 0x02129300 hit_check_hunter  # f_02129300(hit check, attack record r4, hunter r5): the test of one active attack against one hunter, every frame; a roar is seen here wherever the hunter is
+
+# Damage meter (exact, on the host): f_025c824c registers a hit that landed on a monster (hit_resolve calls it); r3 = the monster, r4 = 0 for a hit, r5 = the hunter's number, r6 = the damage it does
+0x025c824c hit_register        # the host's meter takes the hunter and the damage from here
